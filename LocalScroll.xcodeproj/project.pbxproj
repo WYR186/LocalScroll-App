@@ -23,6 +23,10 @@
 		};
 /* End PBXContainerItemProxy section */
 
+/* Begin PBXBuildFile section */
+		5FED80C72FCF63BF005E28C1 /* LocalScrollCore in Frameworks */ = {isa = PBXBuildFile; productRef = 5FED80C62FCF63BF005E28C1 /* LocalScrollCore */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		5FED80942FCF5714005E28C1 /* LocalScroll.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LocalScroll.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		5FED80A72FCF5715005E28C1 /* LocalScrollTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LocalScrollTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -52,6 +56,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				5FED80C72FCF63BF005E28C1 /* LocalScrollCore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -112,6 +117,7 @@
 			);
 			name = LocalScroll;
 			packageProductDependencies = (
+				5FED80C62FCF63BF005E28C1 /* LocalScrollCore */,
 			);
 			productName = LocalScroll;
 			productReference = 5FED80942FCF5714005E28C1 /* LocalScroll.app */;
@@ -195,6 +201,9 @@
 			);
 			mainGroup = 5FED808B2FCF5714005E28C1;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				5FED80C42FCF5884005E28C1 /* XCLocalSwiftPackageReference "../../../project/localScroll_iOS" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 5FED80952FCF5714005E28C1 /* Products */;
 			projectDirPath = "";
@@ -392,6 +401,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "\"LocalScroll/Preview Content\"";
+				DEVELOPMENT_TEAM = R48B46NC85;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
@@ -429,6 +439,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "\"LocalScroll/Preview Content\"";
+				DEVELOPMENT_TEAM = R48B46NC85;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
@@ -583,6 +594,21 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		5FED80C42FCF5884005E28C1 /* XCLocalSwiftPackageReference "../../../project/localScroll_iOS" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../../../project/localScroll_iOS;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		5FED80C62FCF63BF005E28C1 /* LocalScrollCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5FED80C42FCF5884005E28C1 /* XCLocalSwiftPackageReference "../../../project/localScroll_iOS" */;
+			productName = LocalScrollCore;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 5FED808C2FCF5714005E28C1 /* Project object */;
 }
