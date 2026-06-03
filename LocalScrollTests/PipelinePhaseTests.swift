@@ -86,12 +86,15 @@ struct PipelinePhaseTests {
 
     @Test func fourMinuteEquivalentPipelineCompletesWithoutFrameAccumulation() async throws {
         let frameCount = 480
-        let source = MockVideoSource(frameCount: frameCount)
+        let fps = 2.0
+        // 480 frames at 2 fps == a 240s (4-minute) clip, so expectedFrames lines
+        // up with the number of frames the mock actually yields.
+        let source = MockVideoSource(frameCount: frameCount, durationSeconds: Double(frameCount) / fps)
         let ocr = SequentialOCRBackend()
         let pipeline = Pipeline(
             video: source,
             ocr: ocr,
-            config: PipelineConfig(fps: 2.0)
+            config: PipelineConfig(fps: fps)
         )
 
         var lastProgress: PipelineProgress?
@@ -132,15 +135,20 @@ struct PipelinePhaseTests {
 private final class MockVideoSource: VideoSource {
     let sourceURL = URL(fileURLWithPath: "/tmp/mock.mov")
     private let frameCount: Int
+    private let duration: Double
     private let image: CGImage
 
-    init(frameCount: Int) {
+    /// `durationSeconds` defaults to `Double(frameCount)` (matching a 1 fps clip);
+    /// pass it explicitly when the test runs at a different FPS so that
+    /// `expectedFrames` (= ceil(duration * fps)) lines up with the yielded frames.
+    init(frameCount: Int, durationSeconds: Double? = nil) {
         self.frameCount = frameCount
+        self.duration = durationSeconds ?? Double(frameCount)
         self.image = makeOnePixelImage()
     }
 
     func durationSeconds() async throws -> Double {
-        Double(frameCount)
+        duration
     }
 
     func frames(targetFPS: Double) -> AsyncThrowingStream<VideoFrame, Error> {
@@ -171,12 +179,33 @@ private final class SequentialOCRBackend: OCRBackend {
     func detect(in frame: VideoFrame) async throws -> [Line] {
         [
             Line(
-                text: "Unique frame \(frame.idx)",
+                text: distinctSubtitleText(forFrame: frame.idx),
                 bbox: BBox(x: 0, y: 0, w: 80, h: 12),
                 confidence: 1
             ),
         ]
     }
+}
+
+/// Deterministic, high-entropy text that is mutually dissimilar between frames.
+///
+/// Real scrolling subtitles are distinct sentences; a label like
+/// "Unique frame 0" vs "Unique frame 1" is ~92% fuzzy-similar and would be
+/// collapsed by the Stitcher's 80% dedup threshold. This hashes the frame index
+/// (splitmix64) into a 20-char base-36 string so consecutive frames stay well
+/// below that threshold while remaining reproducible.
+private func distinctSubtitleText(forFrame idx: Int) -> String {
+    let alphabet = Array("abcdefghijklmnopqrstuvwxyz0123456789")
+    var z = UInt64(bitPattern: Int64(idx)) &+ 0x9E37_79B9_7F4A_7C15
+    var out = ""
+    for _ in 0..<20 {
+        z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+        z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+        z = z ^ (z >> 31)
+        out.append(alphabet[Int(z % UInt64(alphabet.count))])
+        z = z &+ 0x9E37_79B9_7F4A_7C15
+    }
+    return out
 }
 
 private final class SlowOCRBackend: OCRBackend {
