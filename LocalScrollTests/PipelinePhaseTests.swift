@@ -107,6 +107,45 @@ struct PipelinePhaseTests {
         #expect(lastProgress?.fractionCompleted == 1)
     }
 
+    @Test func nonAdaptivePipelineRunsOCRWithBoundedConcurrency() async throws {
+        let source = MockVideoSource(frameCount: 6)
+        let ocr = ConcurrencyTrackingOCRBackend(delayNanoseconds: 20_000_000)
+        let pipeline = Pipeline(
+            video: source,
+            ocr: ocr,
+            config: PipelineConfig(fps: 1.0, ocrConcurrency: 3)
+        )
+
+        let transcript = try await pipeline.run()
+
+        #expect(transcript.lines.count == 6)
+        #expect(ocr.maxInFlight > 1)
+        #expect(ocr.maxInFlight <= 3)
+    }
+
+    @Test func coverageRefinementBackfillsRiskyIntervals() async throws {
+        let source = TimedMockVideoSource(durationSeconds: 2)
+        let ocr = TimestampOCRBackend()
+        let pipeline = Pipeline(
+            video: source,
+            ocr: ocr,
+            config: PipelineConfig(
+                fps: 1.0,
+                ocrConcurrency: 2,
+                coverageRefinement: CoverageRefinementConfig(
+                    refinementFPS: 4,
+                    intervalPaddingSeconds: 0,
+                    lineDropMinimumDelta: 2
+                )
+            )
+        )
+
+        let transcript = try await pipeline.run()
+
+        #expect(transcript.lines.contains("Middle important detail"))
+        #expect(ocr.detectedTimestamps.contains { abs($0 - 0.25) < 0.01 || abs($0 - 0.5) < 0.01 })
+    }
+
     @Test func pipelineCancellationStopsPromptly() async throws {
         let source = StreamingMockVideoSource(frameCount: 1_000, frameDelayNanoseconds: 1_000_000)
         let ocr = SlowOCRBackend(delayNanoseconds: 20_000_000)
@@ -175,6 +214,40 @@ private final class MockOCRBackend: OCRBackend {
     }
 }
 
+private final class TimestampOCRBackend: OCRBackend {
+    private let lock = NSLock()
+    private var timestamps: [Double] = []
+
+    var detectedTimestamps: [Double] {
+        lock.lock()
+        defer { lock.unlock() }
+        return timestamps
+    }
+
+    func detect(in frame: VideoFrame) async throws -> [Line] {
+        lock.lock()
+        timestamps.append(frame.timestamp)
+        lock.unlock()
+
+        if abs(frame.timestamp) < 0.01 {
+            return [
+                Line(text: "Alpha row", bbox: BBox(x: 0, y: 0, w: 80, h: 10), confidence: 1),
+                Line(text: "Beta row", bbox: BBox(x: 0, y: 12, w: 80, h: 10), confidence: 1),
+                Line(text: "Gamma row", bbox: BBox(x: 0, y: 24, w: 80, h: 10), confidence: 1),
+                Line(text: "Delta row", bbox: BBox(x: 0, y: 36, w: 80, h: 10), confidence: 1),
+            ]
+        }
+        if abs(frame.timestamp - 1.0) < 0.01 {
+            return [
+                Line(text: "Omega row", bbox: BBox(x: 0, y: 0, w: 80, h: 10), confidence: 1),
+            ]
+        }
+        return [
+            Line(text: "Middle important detail", bbox: BBox(x: 0, y: 18, w: 80, h: 10), confidence: 1),
+        ]
+    }
+}
+
 private final class SequentialOCRBackend: OCRBackend {
     func detect(in frame: VideoFrame) async throws -> [Line] {
         [
@@ -206,6 +279,92 @@ private func distinctSubtitleText(forFrame idx: Int) -> String {
         z = z &+ 0x9E37_79B9_7F4A_7C15
     }
     return out
+}
+
+private final class TimedMockVideoSource: VideoSource {
+    let sourceURL = URL(fileURLWithPath: "/tmp/timed-mock.mov")
+    private let duration: Double
+    private let image: CGImage
+
+    init(durationSeconds: Double) {
+        self.duration = durationSeconds
+        self.image = makeOnePixelImage()
+    }
+
+    func durationSeconds() async throws -> Double {
+        duration
+    }
+
+    func frames(targetFPS: Double) -> AsyncThrowingStream<VideoFrame, Error> {
+        frames(targetFPS: targetFPS, startSeconds: 0, endSeconds: nil)
+    }
+
+    func frames(
+        targetFPS: Double,
+        startSeconds: Double,
+        endSeconds: Double?
+    ) -> AsyncThrowingStream<VideoFrame, Error> {
+        AsyncThrowingStream { continuation in
+            let start = max(0, startSeconds)
+            let end = min(endSeconds ?? duration, duration)
+            guard targetFPS > 0, end > start else {
+                continuation.finish()
+                return
+            }
+
+            let count = max(1, Int(ceil((end - start) * targetFPS)))
+            for offset in 0..<count {
+                let timestamp = start + Double(offset) / targetFPS
+                guard timestamp <= end else { break }
+                continuation.yield(
+                    VideoFrame(
+                        idx: Int((timestamp * 1000).rounded(.toNearestOrAwayFromZero)),
+                        timestamp: timestamp,
+                        image: image
+                    )
+                )
+            }
+            continuation.finish()
+        }
+    }
+}
+
+private final class ConcurrencyTrackingOCRBackend: OCRBackend {
+    private let delayNanoseconds: UInt64
+    private let lock = NSLock()
+    private var inFlight = 0
+    private var peakInFlight = 0
+
+    init(delayNanoseconds: UInt64) {
+        self.delayNanoseconds = delayNanoseconds
+    }
+
+    var maxInFlight: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return peakInFlight
+    }
+
+    func detect(in frame: VideoFrame) async throws -> [Line] {
+        lock.lock()
+        inFlight += 1
+        peakInFlight = max(peakInFlight, inFlight)
+        lock.unlock()
+
+        try await Task.sleep(nanoseconds: delayNanoseconds)
+
+        lock.lock()
+        inFlight -= 1
+        lock.unlock()
+
+        return [
+            Line(
+                text: distinctSubtitleText(forFrame: frame.idx),
+                bbox: BBox(x: 0, y: 0, w: 80, h: 12),
+                confidence: 1
+            ),
+        ]
+    }
 }
 
 private final class SlowOCRBackend: OCRBackend {

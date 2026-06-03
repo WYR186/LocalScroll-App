@@ -57,4 +57,19 @@ public enum QualityPreset: String, CaseIterable, Identifiable {
             return SchedulerConfig(commitReverse: true)
         }
     }
+
+    public var coverageRefinementConfig: CoverageRefinementConfig {
+        switch self {
+        case .fast:
+            return CoverageRefinementConfig(refinementFPS: 6)
+        case .smart:
+            return CoverageRefinementConfig(refinementFPS: 8)
+        case .precise:
+            return CoverageRefinementConfig(
+                refinementFPS: 12,
+                lineDropRatio: 0.65,
+                lowConfidenceThreshold: 0.5
+            )
+        }
+    }
 }

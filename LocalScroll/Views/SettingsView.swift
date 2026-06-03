@@ -35,11 +35,43 @@ enum AppearancePreference: String, CaseIterable, Identifiable {
     }
 }
 
+enum OCRLanguagePreference: String, CaseIterable, Identifiable {
+    case automatic = "automatic"
+    case english = "english"
+    case simplifiedChinese = "simplifiedChinese"
+    case traditionalChinese = "traditionalChinese"
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .automatic:          return "Automatic"
+        case .english:            return "English"
+        case .simplifiedChinese:  return "Simplified Chinese"
+        case .traditionalChinese: return "Traditional Chinese"
+        }
+    }
+
+    var recognitionLanguages: [String] {
+        switch self {
+        case .automatic:          return []
+        case .english:            return ["en-US"]
+        case .simplifiedChinese:  return ["zh-Hans"]
+        case .traditionalChinese: return ["zh-Hant"]
+        }
+    }
+
+    var automaticallyDetectsLanguage: Bool {
+        self == .automatic
+    }
+}
+
 // MARK: - Settings view
 
 struct SettingsView: View {
     @AppStorage(SettingsKeys.appearance)          private var appearance         = AppearancePreference.system
     @AppStorage(SettingsKeys.cacheOriginalVideos) private var cacheOriginalVideos = false
+    @AppStorage(SettingsKeys.ocrLanguage)         private var ocrLanguage        = OCRLanguagePreference.automatic
 
     var body: some View {
         NavigationStack {
@@ -57,6 +89,21 @@ struct SettingsView: View {
                     Text("Display")
                 } footer: {
                     Text("System follows your device's Dark Mode switch in Settings.")
+                }
+
+                // ── OCR ───────────────────────────────────────────────────
+                Section {
+                    Picker(selection: $ocrLanguage) {
+                        ForEach(OCRLanguagePreference.allCases) { language in
+                            Text(language.title).tag(language)
+                        }
+                    } label: {
+                        Label("OCR Language", systemImage: "text.viewfinder")
+                    }
+                } header: {
+                    Text("Recognition")
+                } footer: {
+                    Text("Choosing one language is faster and usually more reliable when your videos are not mixed-language.")
                 }
 
                 // ── Storage ───────────────────────────────────────────────

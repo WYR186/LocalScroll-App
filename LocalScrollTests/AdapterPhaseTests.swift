@@ -28,6 +28,28 @@ struct AdapterPhaseTests {
         #expect(zip(timestamps, timestamps.dropFirst()).allSatisfy { $0 <= $1 })
     }
 
+    @Test func avAssetVideoSourceSamplesTimeRange() async throws {
+        let url = try await makeTestMovie(frameCount: 60, sourceFPS: 20, size: CGSize(width: 160, height: 90))
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let source = AVAssetVideoSource(url: url)
+
+        var frames: [VideoFrame] = []
+        for try await frame in source.frames(
+            targetFPS: 4.0,
+            startSeconds: 0.5,
+            endSeconds: 1.1
+        ) {
+            frames.append(frame)
+        }
+
+        #expect(!frames.isEmpty)
+        #expect(frames.allSatisfy { $0.timestamp >= 0.45 && $0.timestamp <= 1.15 })
+        #expect(frames.map(\.timestamp).dropFirst().enumerated().allSatisfy { pair in
+            frames[pair.offset].timestamp <= pair.element
+        })
+    }
+
     @Test func visionBoundingBoxConvertsToTopLeftPixels() {
         let bbox = visionBoundingBoxToBBox(
             CGRect(x: 0.25, y: 0.25, width: 0.5, height: 0.5),

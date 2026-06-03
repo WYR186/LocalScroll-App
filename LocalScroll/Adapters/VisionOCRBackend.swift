@@ -20,24 +20,32 @@ public final class VisionOCRBackend: OCRBackend {
     public var recognitionLevel: VNRequestTextRecognitionLevel
     public var usesLanguageCorrection: Bool
     public var minimumTextHeight: Float?
+    public var automaticallyDetectsLanguage: Bool
 
     public init(
-        recognitionLanguages: [String] = ["en-US", "zh-Hans", "zh-Hant"],
+        recognitionLanguages: [String] = [],
         recognitionLevel: VNRequestTextRecognitionLevel = .accurate,
         usesLanguageCorrection: Bool = true,
-        minimumTextHeight: Float? = nil
+        minimumTextHeight: Float? = nil,
+        automaticallyDetectsLanguage: Bool = true
     ) {
         self.recognitionLanguages = recognitionLanguages
         self.recognitionLevel = recognitionLevel
         self.usesLanguageCorrection = usesLanguageCorrection
         self.minimumTextHeight = minimumTextHeight
+        self.automaticallyDetectsLanguage = automaticallyDetectsLanguage
     }
 
     public func detect(in frame: VideoFrame) async throws -> [Line] {
-        try await Task.detached(priority: .userInitiated) { [recognitionLanguages, recognitionLevel, usesLanguageCorrection, minimumTextHeight] in
+        try await Task.detached(priority: .userInitiated) { [recognitionLanguages, recognitionLevel, usesLanguageCorrection, minimumTextHeight, automaticallyDetectsLanguage] in
             let request = VNRecognizeTextRequest()
             request.recognitionLevel = recognitionLevel
-            request.recognitionLanguages = recognitionLanguages
+            if recognitionLanguages.isEmpty {
+                request.automaticallyDetectsLanguage = automaticallyDetectsLanguage
+            } else {
+                request.recognitionLanguages = recognitionLanguages
+                request.automaticallyDetectsLanguage = false
+            }
             request.usesLanguageCorrection = usesLanguageCorrection
             if let minimumTextHeight {
                 request.minimumTextHeight = minimumTextHeight

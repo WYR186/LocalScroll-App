@@ -8,6 +8,43 @@ public enum StitchMode: String, CaseIterable, Identifiable, Sendable {
     public var id: String { rawValue }
 }
 
+public struct CoverageRefinementConfig: Sendable {
+    public var refinementFPS: Double
+    public var intervalPaddingSeconds: Double
+    public var maxRiskIntervals: Int
+    public var largeDyFrameRatio: Double
+    public var minimumVerticalCoverageOverlap: Double
+    public var minimumTextOverlapRatio: Double
+    public var lineDropRatio: Double
+    public var lineDropMinimumDelta: Int
+    public var lowConfidenceThreshold: Double
+    public var minimumLinesForOverlapCheck: Int
+
+    public init(
+        refinementFPS: Double = 8.0,
+        intervalPaddingSeconds: Double = 0.15,
+        maxRiskIntervals: Int = 40,
+        largeDyFrameRatio: Double = 0.55,
+        minimumVerticalCoverageOverlap: Double = 0.25,
+        minimumTextOverlapRatio: Double = 0.2,
+        lineDropRatio: Double = 0.55,
+        lineDropMinimumDelta: Int = 3,
+        lowConfidenceThreshold: Double = 0.55,
+        minimumLinesForOverlapCheck: Int = 3
+    ) {
+        self.refinementFPS = max(1, refinementFPS)
+        self.intervalPaddingSeconds = max(0, intervalPaddingSeconds)
+        self.maxRiskIntervals = max(1, maxRiskIntervals)
+        self.largeDyFrameRatio = largeDyFrameRatio
+        self.minimumVerticalCoverageOverlap = minimumVerticalCoverageOverlap
+        self.minimumTextOverlapRatio = minimumTextOverlapRatio
+        self.lineDropRatio = lineDropRatio
+        self.lineDropMinimumDelta = max(1, lineDropMinimumDelta)
+        self.lowConfidenceThreshold = lowConfidenceThreshold
+        self.minimumLinesForOverlapCheck = max(1, minimumLinesForOverlapCheck)
+    }
+}
+
 public struct PipelineConfig: Sendable {
     public var fps: Double
     public var stitchConfig: StitchConfig
@@ -15,6 +52,8 @@ public struct PipelineConfig: Sendable {
     public var adaptive: Bool
     public var stitchMode: StitchMode
     public var incrementalThreshold: Int
+    public var ocrConcurrency: Int
+    public var coverageRefinement: CoverageRefinementConfig?
 
     public init(
         fps: Double = 2.0,
@@ -22,7 +61,9 @@ public struct PipelineConfig: Sendable {
         schedulerConfig: SchedulerConfig = SchedulerConfig(),
         adaptive: Bool = false,
         stitchMode: StitchMode = .scroll,
-        incrementalThreshold: Int = 82
+        incrementalThreshold: Int = 82,
+        ocrConcurrency: Int = 3,
+        coverageRefinement: CoverageRefinementConfig? = nil
     ) {
         self.fps = fps
         self.stitchConfig = stitchConfig
@@ -30,6 +71,8 @@ public struct PipelineConfig: Sendable {
         self.adaptive = adaptive
         self.stitchMode = stitchMode
         self.incrementalThreshold = incrementalThreshold
+        self.ocrConcurrency = max(1, ocrConcurrency)
+        self.coverageRefinement = coverageRefinement
     }
 }
 
@@ -71,6 +114,264 @@ public final class Pipeline {
     /// Run extraction: fixed-FPS frames, optional adaptive sampling, Vision OCR, Stitcher dedup.
     public func run(
         onProgress: ((PipelineProgress) async -> Void)? = nil
+    ) async throws -> Transcript {
+        if let coverageRefinement = config.coverageRefinement {
+            return try await runCoverageRefined(
+                coverageRefinement,
+                onProgress: onProgress
+            )
+        }
+        if config.adaptive, motion != nil {
+            return try await runAdaptive(onProgress: onProgress)
+        }
+        return try await runFixed(onProgress: onProgress)
+    }
+
+    private func runCoverageRefined(
+        _ refinement: CoverageRefinementConfig,
+        onProgress: ((PipelineProgress) async -> Void)?
+    ) async throws -> Transcript {
+        let duration = try await video.durationSeconds()
+        let expectedBaseFrames = max(1, Int(ceil(duration * config.fps)))
+        let baseSamples: [FrameOCRSample]
+
+        if config.adaptive, motion != nil {
+            baseSamples = try await collectAdaptiveBaseSamples(
+                expectedFrames: expectedBaseFrames,
+                onProgress: onProgress
+            )
+        } else {
+            baseSamples = try await collectFixedSamples(
+                stream: video.frames(targetFPS: config.fps),
+                expectedFrames: expectedBaseFrames,
+                processedOffset: 0,
+                skippedFrames: 0,
+                onProgress: onProgress
+            ).samples
+        }
+
+        let intervals = riskIntervals(
+            from: baseSamples,
+            duration: duration,
+            refinement: refinement
+        )
+
+        guard !intervals.isEmpty else {
+            return stitch(samples: baseSamples)
+        }
+
+        let refinementExpectedFrames = intervals.reduce(0) { total, interval in
+            total + max(1, Int(ceil((interval.end - interval.start) * refinement.refinementFPS)))
+        }
+        let totalExpectedFrames = expectedBaseFrames + refinementExpectedFrames
+        var supplementalSamples: [FrameOCRSample] = []
+        supplementalSamples.reserveCapacity(refinementExpectedFrames)
+        var processedSupplemental = 0
+
+        for interval in intervals {
+            try Task.checkCancellation()
+            let collection = try await collectFixedSamples(
+                stream: video.frames(
+                    targetFPS: refinement.refinementFPS,
+                    startSeconds: interval.start,
+                    endSeconds: interval.end
+                ),
+                expectedFrames: totalExpectedFrames,
+                processedOffset: expectedBaseFrames + processedSupplemental,
+                skippedFrames: 0,
+                onProgress: onProgress
+            )
+            supplementalSamples.append(contentsOf: collection.samples)
+            processedSupplemental += collection.processedFrames
+        }
+
+        return stitch(samples: mergedSamples(baseSamples + supplementalSamples))
+    }
+
+    private func collectAdaptiveBaseSamples(
+        expectedFrames: Int,
+        onProgress: ((PipelineProgress) async -> Void)?
+    ) async throws -> [FrameOCRSample] {
+        var scheduler = Scheduler(config.schedulerConfig)
+        var previousFrame: VideoFrame?
+        var samples: [FrameOCRSample] = []
+        var processedFrames = 0
+        var skippedFrames = 0
+
+        for try await frame in video.frames(targetFPS: config.fps) {
+            try Task.checkCancellation()
+
+            var dy: Double?
+            var decision: FrameDecision?
+            if let motion, let previous = previousFrame {
+                let estimatedDy = try await motion.estimateDy(previous: previous, current: frame)
+                try Task.checkCancellation()
+                dy = estimatedDy
+                decision = scheduler.decide(dy: estimatedDy, frameHeightPx: frame.height)
+
+                if decision?.shouldOcr == false {
+                    processedFrames += 1
+                    skippedFrames += 1
+                    samples.append(
+                        FrameOCRSample(
+                            idx: frame.idx,
+                            timestamp: frame.timestamp,
+                            frameHeight: frame.height,
+                            lines: [],
+                            didOCR: false,
+                            averageConfidence: nil,
+                            coverage: nil,
+                            dy: dy,
+                            scrollState: decision?.state,
+                            shouldAppendNew: false
+                        )
+                    )
+                    await onProgress?(
+                        PipelineProgress(
+                            processedFrames: processedFrames,
+                            skippedFrames: skippedFrames,
+                            expectedFrames: expectedFrames,
+                            timestamp: frame.timestamp,
+                            recognizedLines: 0,
+                            scrollState: decision?.state
+                        )
+                    )
+                    previousFrame = frame
+                    continue
+                }
+            }
+
+            let result = try await recognize(frame)
+            let sample = makeSample(
+                from: result,
+                dy: dy,
+                scrollState: decision?.state,
+                shouldAppendNew: decision?.shouldAppendNew ?? true
+            )
+            samples.append(sample)
+
+            processedFrames += 1
+            await onProgress?(
+                PipelineProgress(
+                    processedFrames: processedFrames,
+                    skippedFrames: skippedFrames,
+                    expectedFrames: expectedFrames,
+                    timestamp: frame.timestamp,
+                    recognizedLines: result.lines.count,
+                    scrollState: decision?.state
+                )
+            )
+            previousFrame = frame
+        }
+
+        return samples
+    }
+
+    private struct SampleCollection {
+        let samples: [FrameOCRSample]
+        let processedFrames: Int
+    }
+
+    private func collectFixedSamples(
+        stream: AsyncThrowingStream<VideoFrame, Error>,
+        expectedFrames: Int,
+        processedOffset: Int,
+        skippedFrames: Int,
+        onProgress: ((PipelineProgress) async -> Void)?
+    ) async throws -> SampleCollection {
+        var samples: [FrameOCRSample] = []
+        var processedFrames = 0
+        var iterator = stream.makeAsyncIterator()
+
+        while true {
+            try Task.checkCancellation()
+            var batch: [VideoFrame] = []
+            batch.reserveCapacity(config.ocrConcurrency)
+            for _ in 0..<config.ocrConcurrency {
+                if let frame = try await iterator.next() {
+                    batch.append(frame)
+                } else {
+                    break
+                }
+            }
+            guard !batch.isEmpty else { break }
+
+            let results = try await recognizeBatch(batch)
+            for result in results {
+                try Task.checkCancellation()
+                let sample = makeSample(
+                    from: result,
+                    dy: nil,
+                    scrollState: nil,
+                    shouldAppendNew: true
+                )
+                samples.append(sample)
+                processedFrames += 1
+                await onProgress?(
+                    PipelineProgress(
+                        processedFrames: processedOffset + processedFrames,
+                        skippedFrames: skippedFrames,
+                        expectedFrames: expectedFrames,
+                        timestamp: result.frame.timestamp,
+                        recognizedLines: result.lines.count,
+                        scrollState: nil
+                    )
+                )
+            }
+        }
+
+        return SampleCollection(samples: samples, processedFrames: processedFrames)
+    }
+
+    private func runFixed(
+        onProgress: ((PipelineProgress) async -> Void)?
+    ) async throws -> Transcript {
+        let duration = try await video.durationSeconds()
+        let expectedFrames = max(1, Int(ceil(duration * config.fps)))
+        var stitcher = Stitcher(config: config.stitchConfig)
+        var processedFrames = 0
+
+        var iterator = video.frames(targetFPS: config.fps).makeAsyncIterator()
+        while true {
+            try Task.checkCancellation()
+            var batch: [VideoFrame] = []
+            batch.reserveCapacity(config.ocrConcurrency)
+            for _ in 0..<config.ocrConcurrency {
+                if let frame = try await iterator.next() {
+                    batch.append(frame)
+                } else {
+                    break
+                }
+            }
+            guard !batch.isEmpty else { break }
+
+            let results = try await recognizeBatch(batch)
+            for result in results {
+                try Task.checkCancellation()
+                stitcher.consume(
+                    result.lines,
+                    frameIdx: result.frame.idx,
+                    timestamp: result.frame.timestamp
+                )
+                processedFrames += 1
+                await onProgress?(
+                    PipelineProgress(
+                        processedFrames: processedFrames,
+                        skippedFrames: 0,
+                        expectedFrames: expectedFrames,
+                        timestamp: result.frame.timestamp,
+                        recognizedLines: result.lines.count,
+                        scrollState: nil
+                    )
+                )
+            }
+        }
+
+        return finalize(stitcher)
+    }
+
+    private func runAdaptive(
+        onProgress: ((PipelineProgress) async -> Void)?
     ) async throws -> Transcript {
         let duration = try await video.durationSeconds()
         let expectedFrames = max(1, Int(ceil(duration * config.fps)))
@@ -138,6 +439,310 @@ public final class Pipeline {
             previousFrame = shouldEstimateMotion ? frame : nil
         }
 
+        return finalize(stitcher)
+    }
+
+    private struct OCRFrameResult {
+        let frame: VideoFrame
+        let ocrWidth: Int
+        let ocrHeight: Int
+        let lines: [Line]
+    }
+
+    private struct FrameOCRSample {
+        let idx: Int
+        let timestamp: Double
+        let frameHeight: Int
+        let lines: [Line]
+        let didOCR: Bool
+        let averageConfidence: Double?
+        let coverage: BBoxCoverage?
+        let dy: Double?
+        let scrollState: ScrollState?
+        let shouldAppendNew: Bool
+    }
+
+    private struct BBoxCoverage {
+        let minY: Double
+        let maxY: Double
+        let areaRatio: Double
+
+        var span: Double {
+            max(0, maxY - minY)
+        }
+    }
+
+    private struct RiskInterval {
+        let start: Double
+        let end: Double
+    }
+
+    private func recognize(_ frame: VideoFrame) async throws -> OCRFrameResult {
+        let ocrFrame: VideoFrame
+        if let preprocessor {
+            ocrFrame = try await preprocessor.process(frame)
+            try Task.checkCancellation()
+        } else {
+            ocrFrame = frame
+        }
+
+        let lines = try await ocr.detect(in: ocrFrame)
+        try Task.checkCancellation()
+        return OCRFrameResult(
+            frame: frame,
+            ocrWidth: ocrFrame.width,
+            ocrHeight: ocrFrame.height,
+            lines: lines
+        )
+    }
+
+    private func recognizeBatch(_ frames: [VideoFrame]) async throws -> [OCRFrameResult] {
+        try await withThrowingTaskGroup(of: OCRFrameResult.self) { group in
+            for frame in frames {
+                group.addTask { [ocr, preprocessor] in
+                    try Task.checkCancellation()
+
+                    let ocrFrame: VideoFrame
+                    if let preprocessor {
+                        ocrFrame = try await preprocessor.process(frame)
+                        try Task.checkCancellation()
+                    } else {
+                        ocrFrame = frame
+                    }
+
+                    let lines = try await ocr.detect(in: ocrFrame)
+                    try Task.checkCancellation()
+                    return OCRFrameResult(
+                        frame: frame,
+                        ocrWidth: ocrFrame.width,
+                        ocrHeight: ocrFrame.height,
+                        lines: lines
+                    )
+                }
+            }
+
+            var results: [OCRFrameResult] = []
+            results.reserveCapacity(frames.count)
+            for try await result in group {
+                results.append(result)
+            }
+            return results.sorted { $0.frame.idx < $1.frame.idx }
+        }
+    }
+
+    private func makeSample(
+        from result: OCRFrameResult,
+        dy: Double?,
+        scrollState: ScrollState?,
+        shouldAppendNew: Bool
+    ) -> FrameOCRSample {
+        FrameOCRSample(
+            idx: result.frame.idx,
+            timestamp: result.frame.timestamp,
+            frameHeight: result.frame.height,
+            lines: result.lines,
+            didOCR: true,
+            averageConfidence: averageConfidence(result.lines),
+            coverage: bboxCoverage(
+                result.lines,
+                imageWidth: result.ocrWidth,
+                imageHeight: result.ocrHeight
+            ),
+            dy: dy,
+            scrollState: scrollState,
+            shouldAppendNew: shouldAppendNew
+        )
+    }
+
+    private func averageConfidence(_ lines: [Line]) -> Double? {
+        guard !lines.isEmpty else { return nil }
+        return lines.reduce(0) { $0 + $1.confidence } / Double(lines.count)
+    }
+
+    private func bboxCoverage(
+        _ lines: [Line],
+        imageWidth: Int,
+        imageHeight: Int
+    ) -> BBoxCoverage? {
+        guard imageWidth > 0, imageHeight > 0, !lines.isEmpty else { return nil }
+
+        var minY = Double.greatestFiniteMagnitude
+        var maxY = 0.0
+        var area = 0.0
+        for line in lines {
+            let y0 = max(0, min(imageHeight, line.bbox.y))
+            let y1 = max(0, min(imageHeight, line.bbox.y + line.bbox.h))
+            let x0 = max(0, min(imageWidth, line.bbox.x))
+            let x1 = max(0, min(imageWidth, line.bbox.x + line.bbox.w))
+            guard y1 > y0, x1 > x0 else { continue }
+
+            minY = min(minY, Double(y0) / Double(imageHeight))
+            maxY = max(maxY, Double(y1) / Double(imageHeight))
+            area += Double((x1 - x0) * (y1 - y0))
+        }
+
+        guard minY.isFinite, maxY > minY else { return nil }
+        return BBoxCoverage(
+            minY: minY,
+            maxY: maxY,
+            areaRatio: area / Double(imageWidth * imageHeight)
+        )
+    }
+
+    private func riskIntervals(
+        from samples: [FrameOCRSample],
+        duration: Double,
+        refinement: CoverageRefinementConfig
+    ) -> [RiskInterval] {
+        guard samples.count >= 2 else { return [] }
+
+        var intervals: [RiskInterval] = []
+        for pair in zip(samples, samples.dropFirst()) {
+            let previous = pair.0
+            let current = pair.1
+            guard current.timestamp > previous.timestamp else { continue }
+
+            if isRiskyTransition(
+                previous: previous,
+                current: current,
+                refinement: refinement
+            ) {
+                intervals.append(
+                    RiskInterval(
+                        start: max(0, previous.timestamp - refinement.intervalPaddingSeconds),
+                        end: min(duration, current.timestamp + refinement.intervalPaddingSeconds)
+                    )
+                )
+            }
+        }
+
+        return mergedIntervals(intervals)
+            .prefix(refinement.maxRiskIntervals)
+            .map { $0 }
+    }
+
+    private func isRiskyTransition(
+        previous: FrameOCRSample,
+        current: FrameOCRSample,
+        refinement: CoverageRefinementConfig
+    ) -> Bool {
+        if current.scrollState == .discontinuity {
+            return true
+        }
+
+        if let dy = current.dy,
+           abs(dy) >= refinement.largeDyFrameRatio * Double(max(1, current.frameHeight)) {
+            return true
+        }
+
+        guard previous.didOCR, current.didOCR else {
+            return false
+        }
+
+        if current.lines.count + refinement.lineDropMinimumDelta <= previous.lines.count,
+           Double(current.lines.count) <= Double(previous.lines.count) * refinement.lineDropRatio {
+            return true
+        }
+
+        if let averageConfidence = current.averageConfidence,
+           !current.lines.isEmpty,
+           averageConfidence < refinement.lowConfidenceThreshold {
+            return true
+        }
+
+        if previous.lines.count >= refinement.minimumLinesForOverlapCheck,
+           current.lines.count >= refinement.minimumLinesForOverlapCheck {
+            if let previousCoverage = previous.coverage,
+               let currentCoverage = current.coverage,
+               verticalOverlap(previousCoverage, currentCoverage) < refinement.minimumVerticalCoverageOverlap {
+                return true
+            }
+
+            if textOverlap(previous.lines, current.lines) < refinement.minimumTextOverlapRatio {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    private func verticalOverlap(_ lhs: BBoxCoverage, _ rhs: BBoxCoverage) -> Double {
+        let intersection = max(0, min(lhs.maxY, rhs.maxY) - max(lhs.minY, rhs.minY))
+        let denominator = max(0.000_001, min(lhs.span, rhs.span))
+        return intersection / denominator
+    }
+
+    private func textOverlap(_ lhs: [Line], _ rhs: [Line]) -> Double {
+        let lhsTexts = lhs.map(\.text)
+        let rhsTexts = rhs.map(\.text)
+        guard !lhsTexts.isEmpty, !rhsTexts.isEmpty else { return 0 }
+
+        var matches = 0
+        var used = Set<Int>()
+        for left in lhsTexts {
+            if let index = rhsTexts.indices.first(where: { index in
+                !used.contains(index) && similar(left, rhsTexts[index], threshold: 85)
+            }) {
+                matches += 1
+                used.insert(index)
+            }
+        }
+        return Double(matches) / Double(min(lhsTexts.count, rhsTexts.count))
+    }
+
+    private func mergedIntervals(_ intervals: [RiskInterval]) -> [RiskInterval] {
+        let sorted = intervals
+            .filter { $0.end > $0.start }
+            .sorted { $0.start < $1.start }
+        guard var current = sorted.first else { return [] }
+
+        var merged: [RiskInterval] = []
+        for interval in sorted.dropFirst() {
+            if interval.start <= current.end {
+                current = RiskInterval(start: current.start, end: max(current.end, interval.end))
+            } else {
+                merged.append(current)
+                current = interval
+            }
+        }
+        merged.append(current)
+        return merged
+    }
+
+    private func mergedSamples(_ samples: [FrameOCRSample]) -> [FrameOCRSample] {
+        let sorted = samples.sorted {
+            if $0.timestamp == $1.timestamp {
+                return $0.idx < $1.idx
+            }
+            return $0.timestamp < $1.timestamp
+        }
+        let timestampTolerance = max(0.005, 0.25 / max(1, config.fps))
+        var merged: [FrameOCRSample] = []
+        for sample in sorted {
+            if let last = merged.last,
+               abs(last.timestamp - sample.timestamp) <= timestampTolerance,
+               last.lines == sample.lines {
+                continue
+            }
+            merged.append(sample)
+        }
+        return merged
+    }
+
+    private func stitch(samples: [FrameOCRSample]) -> Transcript {
+        var stitcher = Stitcher(config: config.stitchConfig)
+        for sample in samples where sample.didOCR {
+            if sample.shouldAppendNew {
+                stitcher.consume(sample.lines, frameIdx: sample.idx, timestamp: sample.timestamp)
+            } else {
+                stitcher.consumeReverse(sample.lines, frameIdx: sample.idx, timestamp: sample.timestamp)
+            }
+        }
+        return finalize(stitcher)
+    }
+
+    private func finalize(_ stitcher: Stitcher) -> Transcript {
+        var stitcher = stitcher
         var transcript = stitcher.finalize()
         transcript.sourceVideo = video.sourceURL
         if config.stitchMode == .caption {

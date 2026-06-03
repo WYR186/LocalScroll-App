@@ -301,7 +301,13 @@ final class ProcessingViewModel: ObservableObject {
         captionMode: Bool
     ) -> Pipeline {
         let source = AVAssetVideoSource(url: videoURL)
-        let ocr = VisionOCRBackend()
+        let language = OCRLanguagePreference(
+            rawValue: UserDefaults.standard.string(forKey: SettingsKeys.ocrLanguage) ?? ""
+        ) ?? .automatic
+        let ocr = VisionOCRBackend(
+            recognitionLanguages: language.recognitionLanguages,
+            automaticallyDetectsLanguage: language.automaticallyDetectsLanguage
+        )
         let motion = preset.usesAdaptiveSampling ? VisionMotionEstimator() : nil
         let preprocessor = preset.usesPreprocessing ? CoreImagePreprocessor() : nil
         return Pipeline(
@@ -314,7 +320,8 @@ final class ProcessingViewModel: ObservableObject {
                 stitchConfig: preset.stitchConfig,
                 schedulerConfig: preset.schedulerConfig,
                 adaptive: preset.usesAdaptiveSampling,
-                stitchMode: captionMode ? .caption : .scroll
+                stitchMode: captionMode ? .caption : .scroll,
+                coverageRefinement: preset.coverageRefinementConfig
             )
         )
     }
@@ -337,6 +344,7 @@ final class ProcessingViewModel: ObservableObject {
 enum SettingsKeys {
     static let cacheOriginalVideos = "cacheOriginalVideos"
     static let appearance          = "appearance"
+    static let ocrLanguage         = "ocrLanguage"
 }
 
 enum LocalScrollUIError: Error, LocalizedError {

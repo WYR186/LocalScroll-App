@@ -1,4 +1,5 @@
 import CoreGraphics
+import CoreImage
 import CoreVideo
 import Foundation
 import Vision
@@ -8,17 +9,20 @@ public struct VisionMotionEstimatorConfig: Sendable {
     public var movingPixelThreshold: Float
     public var minimumMovingSamples: Int
     public var maximumSamples: Int
+    public var analysisScale: Double
 
     public init(
         accuracy: VNGenerateOpticalFlowRequest.ComputationAccuracy = .medium,
         movingPixelThreshold: Float = 0.5,
         minimumMovingSamples: Int = 100,
-        maximumSamples: Int = 50_000
+        maximumSamples: Int = 50_000,
+        analysisScale: Double = 0.5
     ) {
         self.accuracy = accuracy
         self.movingPixelThreshold = movingPixelThreshold
         self.minimumMovingSamples = minimumMovingSamples
         self.maximumSamples = maximumSamples
+        self.analysisScale = analysisScale
     }
 }
 
@@ -35,27 +39,32 @@ public final class VisionMotionEstimator: MotionEstimator {
                 throw VisionMotionEstimatorError.mismatchedFrameSize
             }
 
+            let scale = min(1.0, max(0.1, config.analysisScale))
+            let previousImage = try makeOpticalFlowImage(previous.image, scale: scale)
+            let currentImage = try makeOpticalFlowImage(current.image, scale: scale)
+
             let request = VNGenerateOpticalFlowRequest(
-                targetedCGImage: current.image,
+                targetedCGImage: currentImage,
                 options: [:],
                 completionHandler: nil
             )
             request.computationAccuracy = config.accuracy
             request.outputPixelFormat = kCVPixelFormatType_TwoComponent32Float
 
-            let handler = VNImageRequestHandler(cgImage: previous.image, orientation: .up, options: [:])
+            let handler = VNImageRequestHandler(cgImage: previousImage, orientation: .up, options: [:])
             try handler.perform([request])
 
             guard let observation = request.results?.first else {
                 throw VisionMotionEstimatorError.noObservation
             }
 
-            return try medianDy(
+            let scaledDy = try medianDy(
                 from: observation.pixelBuffer,
-                movingPixelThreshold: config.movingPixelThreshold,
+                movingPixelThreshold: max(0.1, config.movingPixelThreshold * Float(scale)),
                 minimumMovingSamples: config.minimumMovingSamples,
                 maximumSamples: config.maximumSamples
             )
+            return scaledDy / scale
         }.value
     }
 }
@@ -65,6 +74,7 @@ public enum VisionMotionEstimatorError: Error, LocalizedError {
     case noObservation
     case unsupportedPixelFormat(OSType)
     case unreadablePixelBuffer
+    case imageConversionFailed
 
     public var errorDescription: String? {
         switch self {
@@ -76,8 +86,29 @@ public enum VisionMotionEstimatorError: Error, LocalizedError {
             return "Unsupported optical-flow pixel format: \(format)."
         case .unreadablePixelBuffer:
             return "Could not read the optical-flow pixel buffer."
+        case .imageConversionFailed:
+            return "Could not prepare a scaled frame for optical-flow analysis."
         }
     }
+}
+
+private func makeOpticalFlowImage(_ image: CGImage, scale: Double) throws -> CGImage {
+    guard scale < 0.999 else { return image }
+
+    let input = CIImage(cgImage: image)
+    let output = input.applyingFilter(
+        "CILanczosScaleTransform",
+        parameters: [
+            kCIInputScaleKey: scale,
+            kCIInputAspectRatioKey: 1.0,
+        ]
+    )
+    let extent = output.extent.integral
+    let context = CIContext()
+    guard let image = context.createCGImage(output, from: extent) else {
+        throw VisionMotionEstimatorError.imageConversionFailed
+    }
+    return image
 }
 
 private func medianDy(

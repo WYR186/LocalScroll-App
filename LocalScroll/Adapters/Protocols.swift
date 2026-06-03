@@ -33,6 +33,47 @@ public protocol VideoSource {
     /// Implementations yield contiguous zero-based indices and monotonic
     /// timestamps. Cancellation stops extraction promptly.
     func frames(targetFPS: Double) -> AsyncThrowingStream<VideoFrame, Error>
+
+    /// Sample frames at the requested fixed FPS inside a time range.
+    ///
+    /// `endSeconds == nil` means "until the end of the video". Implementations
+    /// that can seek efficiently should avoid decoding unrelated ranges.
+    func frames(
+        targetFPS: Double,
+        startSeconds: Double,
+        endSeconds: Double?
+    ) -> AsyncThrowingStream<VideoFrame, Error>
+}
+
+public extension VideoSource {
+    func frames(
+        targetFPS: Double,
+        startSeconds: Double,
+        endSeconds: Double?
+    ) -> AsyncThrowingStream<VideoFrame, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    let clampedStart = max(0, startSeconds)
+                    for try await frame in frames(targetFPS: targetFPS) {
+                        try Task.checkCancellation()
+                        guard frame.timestamp >= clampedStart else { continue }
+                        if let endSeconds, frame.timestamp > endSeconds {
+                            break
+                        }
+                        continuation.yield(frame)
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+
+            continuation.onTermination = { _ in
+                task.cancel()
+            }
+        }
+    }
 }
 
 public protocol OCRBackend {
