@@ -76,6 +76,63 @@ public struct PipelineConfig: Sendable {
     }
 }
 
+public struct PipelineLineCheckpoint: Codable, Equatable, Sendable {
+    public var text: String
+    public var x: Int
+    public var y: Int
+    public var w: Int
+    public var h: Int
+    public var confidence: Double
+
+    public init(line: Line) {
+        self.text = line.text
+        self.x = line.bbox.x
+        self.y = line.bbox.y
+        self.w = line.bbox.w
+        self.h = line.bbox.h
+        self.confidence = line.confidence
+    }
+
+    public var line: Line {
+        Line(
+            text: text,
+            bbox: BBox(x: x, y: y, w: w, h: h),
+            confidence: confidence
+        )
+    }
+}
+
+public struct PipelineFrameCheckpoint: Codable, Equatable, Sendable {
+    public var idx: Int
+    public var timestamp: Double
+    public var frameHeight: Int
+    public var lines: [PipelineLineCheckpoint]
+    public var didOCR: Bool
+    public var averageConfidence: Double?
+    public var coverageMinY: Double?
+    public var coverageMaxY: Double?
+    public var coverageAreaRatio: Double?
+    public var dy: Double?
+    public var scrollStateRawValue: String?
+    public var shouldAppendNew: Bool
+}
+
+public struct PipelineResumeState: Equatable, Sendable {
+    public var baseSamples: [PipelineFrameCheckpoint]
+    public var startSeconds: Double
+
+    public init(baseSamples: [PipelineFrameCheckpoint], startSeconds: Double) {
+        self.baseSamples = baseSamples
+        self.startSeconds = max(0, startSeconds)
+    }
+}
+
+public struct PipelineCheckpointSnapshot: Equatable, Sendable {
+    public var timestamp: Double
+    public var processedFrames: Int
+    public var baseSamples: [PipelineFrameCheckpoint]
+}
+
 public struct PipelineProgress: Equatable, Sendable {
     public let processedFrames: Int
     public let skippedFrames: Int
@@ -113,11 +170,25 @@ public final class Pipeline {
 
     /// Run extraction: fixed-FPS frames, optional adaptive sampling, Vision OCR, Stitcher dedup.
     public func run(
+        resumeState: PipelineResumeState? = nil,
+        checkpointEveryFrames: Int = 12,
+        onCheckpoint: ((PipelineCheckpointSnapshot) async -> Void)? = nil,
         onProgress: ((PipelineProgress) async -> Void)? = nil
     ) async throws -> Transcript {
         if let coverageRefinement = config.coverageRefinement {
             return try await runCoverageRefined(
                 coverageRefinement,
+                resumeState: resumeState,
+                checkpointEveryFrames: checkpointEveryFrames,
+                onCheckpoint: onCheckpoint,
+                onProgress: onProgress
+            )
+        }
+        if resumeState != nil || onCheckpoint != nil {
+            return try await runCheckpointed(
+                resumeState: resumeState,
+                checkpointEveryFrames: checkpointEveryFrames,
+                onCheckpoint: onCheckpoint,
                 onProgress: onProgress
             )
         }
@@ -129,25 +200,42 @@ public final class Pipeline {
 
     private func runCoverageRefined(
         _ refinement: CoverageRefinementConfig,
+        resumeState: PipelineResumeState?,
+        checkpointEveryFrames: Int,
+        onCheckpoint: ((PipelineCheckpointSnapshot) async -> Void)?,
         onProgress: ((PipelineProgress) async -> Void)?
     ) async throws -> Transcript {
         let duration = try await video.durationSeconds()
         let expectedBaseFrames = max(1, Int(ceil(duration * config.fps)))
-        let baseSamples: [FrameOCRSample]
+        var baseSamples = resumeState?.baseSamples.map(FrameOCRSample.init(checkpoint:)) ?? []
+        let resumeStart = resumeState?.startSeconds ?? 0
 
         if config.adaptive, motion != nil {
-            baseSamples = try await collectAdaptiveBaseSamples(
+            let collected = try await collectAdaptiveBaseSamples(
+                startSeconds: resumeStart,
+                initialSamples: baseSamples,
                 expectedFrames: expectedBaseFrames,
+                checkpointEveryFrames: checkpointEveryFrames,
+                onCheckpoint: onCheckpoint,
                 onProgress: onProgress
             )
+            baseSamples = collected
         } else {
-            baseSamples = try await collectFixedSamples(
-                stream: video.frames(targetFPS: config.fps),
+            let collection = try await collectFixedSamples(
+                stream: video.frames(
+                    targetFPS: config.fps,
+                    startSeconds: resumeStart,
+                    endSeconds: nil
+                ),
                 expectedFrames: expectedBaseFrames,
-                processedOffset: 0,
+                processedOffset: baseSamples.count,
                 skippedFrames: 0,
+                initialSamples: baseSamples,
+                checkpointEveryFrames: checkpointEveryFrames,
+                onCheckpoint: onCheckpoint,
                 onProgress: onProgress
-            ).samples
+            )
+            baseSamples = collection.samples
         }
 
         let intervals = riskIntervals(
@@ -179,6 +267,9 @@ public final class Pipeline {
                 expectedFrames: totalExpectedFrames,
                 processedOffset: expectedBaseFrames + processedSupplemental,
                 skippedFrames: 0,
+                initialSamples: [],
+                checkpointEveryFrames: 0,
+                onCheckpoint: nil,
                 onProgress: onProgress
             )
             supplementalSamples.append(contentsOf: collection.samples)
@@ -189,16 +280,24 @@ public final class Pipeline {
     }
 
     private func collectAdaptiveBaseSamples(
+        startSeconds: Double,
+        initialSamples: [FrameOCRSample],
         expectedFrames: Int,
+        checkpointEveryFrames: Int,
+        onCheckpoint: ((PipelineCheckpointSnapshot) async -> Void)?,
         onProgress: ((PipelineProgress) async -> Void)?
     ) async throws -> [FrameOCRSample] {
         var scheduler = Scheduler(config.schedulerConfig)
         var previousFrame: VideoFrame?
-        var samples: [FrameOCRSample] = []
-        var processedFrames = 0
+        var samples = initialSamples
+        var processedFrames = initialSamples.count
         var skippedFrames = 0
 
-        for try await frame in video.frames(targetFPS: config.fps) {
+        for try await frame in video.frames(
+            targetFPS: config.fps,
+            startSeconds: startSeconds,
+            endSeconds: nil
+        ) {
             try Task.checkCancellation()
 
             var dy: Double?
@@ -236,6 +335,12 @@ public final class Pipeline {
                             scrollState: decision?.state
                         )
                     )
+                    await checkpointIfNeeded(
+                        samples: samples,
+                        processedFrames: processedFrames,
+                        checkpointEveryFrames: checkpointEveryFrames,
+                        onCheckpoint: onCheckpoint
+                    )
                     previousFrame = frame
                     continue
                 }
@@ -261,6 +366,12 @@ public final class Pipeline {
                     scrollState: decision?.state
                 )
             )
+            await checkpointIfNeeded(
+                samples: samples,
+                processedFrames: processedFrames,
+                checkpointEveryFrames: checkpointEveryFrames,
+                onCheckpoint: onCheckpoint
+            )
             previousFrame = frame
         }
 
@@ -277,9 +388,12 @@ public final class Pipeline {
         expectedFrames: Int,
         processedOffset: Int,
         skippedFrames: Int,
+        initialSamples: [FrameOCRSample] = [],
+        checkpointEveryFrames: Int = 0,
+        onCheckpoint: ((PipelineCheckpointSnapshot) async -> Void)? = nil,
         onProgress: ((PipelineProgress) async -> Void)?
     ) async throws -> SampleCollection {
-        var samples: [FrameOCRSample] = []
+        var samples = initialSamples
         var processedFrames = 0
         var iterator = stream.makeAsyncIterator()
 
@@ -317,10 +431,57 @@ public final class Pipeline {
                         scrollState: nil
                     )
                 )
+                await checkpointIfNeeded(
+                    samples: samples,
+                    processedFrames: processedOffset + processedFrames,
+                    checkpointEveryFrames: checkpointEveryFrames,
+                    onCheckpoint: onCheckpoint
+                )
             }
         }
 
         return SampleCollection(samples: samples, processedFrames: processedFrames)
+    }
+
+    private func runCheckpointed(
+        resumeState: PipelineResumeState?,
+        checkpointEveryFrames: Int,
+        onCheckpoint: ((PipelineCheckpointSnapshot) async -> Void)?,
+        onProgress: ((PipelineProgress) async -> Void)?
+    ) async throws -> Transcript {
+        let duration = try await video.durationSeconds()
+        let expectedFrames = max(1, Int(ceil(duration * config.fps)))
+        let initialSamples = resumeState?.baseSamples.map(FrameOCRSample.init(checkpoint:)) ?? []
+        let startSeconds = resumeState?.startSeconds ?? 0
+
+        let samples: [FrameOCRSample]
+        if config.adaptive, motion != nil {
+            samples = try await collectAdaptiveBaseSamples(
+                startSeconds: startSeconds,
+                initialSamples: initialSamples,
+                expectedFrames: expectedFrames,
+                checkpointEveryFrames: checkpointEveryFrames,
+                onCheckpoint: onCheckpoint,
+                onProgress: onProgress
+            )
+        } else {
+            samples = try await collectFixedSamples(
+                stream: video.frames(
+                    targetFPS: config.fps,
+                    startSeconds: startSeconds,
+                    endSeconds: nil
+                ),
+                expectedFrames: expectedFrames,
+                processedOffset: initialSamples.count,
+                skippedFrames: 0,
+                initialSamples: initialSamples,
+                checkpointEveryFrames: checkpointEveryFrames,
+                onCheckpoint: onCheckpoint,
+                onProgress: onProgress
+            ).samples
+        }
+
+        return stitch(samples: samples)
     }
 
     private func runFixed(
@@ -460,6 +621,70 @@ public final class Pipeline {
         let dy: Double?
         let scrollState: ScrollState?
         let shouldAppendNew: Bool
+
+        init(
+            idx: Int,
+            timestamp: Double,
+            frameHeight: Int,
+            lines: [Line],
+            didOCR: Bool,
+            averageConfidence: Double?,
+            coverage: BBoxCoverage?,
+            dy: Double?,
+            scrollState: ScrollState?,
+            shouldAppendNew: Bool
+        ) {
+            self.idx = idx
+            self.timestamp = timestamp
+            self.frameHeight = frameHeight
+            self.lines = lines
+            self.didOCR = didOCR
+            self.averageConfidence = averageConfidence
+            self.coverage = coverage
+            self.dy = dy
+            self.scrollState = scrollState
+            self.shouldAppendNew = shouldAppendNew
+        }
+
+        init(checkpoint: PipelineFrameCheckpoint) {
+            let coverage: BBoxCoverage?
+            if let minY = checkpoint.coverageMinY,
+               let maxY = checkpoint.coverageMaxY,
+               let areaRatio = checkpoint.coverageAreaRatio {
+                coverage = BBoxCoverage(minY: minY, maxY: maxY, areaRatio: areaRatio)
+            } else {
+                coverage = nil
+            }
+            self.init(
+                idx: checkpoint.idx,
+                timestamp: checkpoint.timestamp,
+                frameHeight: checkpoint.frameHeight,
+                lines: checkpoint.lines.map(\.line),
+                didOCR: checkpoint.didOCR,
+                averageConfidence: checkpoint.averageConfidence,
+                coverage: coverage,
+                dy: checkpoint.dy,
+                scrollState: checkpoint.scrollStateRawValue.flatMap(ScrollState.init(rawValue:)),
+                shouldAppendNew: checkpoint.shouldAppendNew
+            )
+        }
+
+        var checkpoint: PipelineFrameCheckpoint {
+            PipelineFrameCheckpoint(
+                idx: idx,
+                timestamp: timestamp,
+                frameHeight: frameHeight,
+                lines: lines.map(PipelineLineCheckpoint.init(line:)),
+                didOCR: didOCR,
+                averageConfidence: averageConfidence,
+                coverageMinY: coverage?.minY,
+                coverageMaxY: coverage?.maxY,
+                coverageAreaRatio: coverage?.areaRatio,
+                dy: dy,
+                scrollStateRawValue: scrollState?.rawValue,
+                shouldAppendNew: shouldAppendNew
+            )
+        }
     }
 
     private struct BBoxCoverage {
@@ -739,6 +964,28 @@ public final class Pipeline {
             }
         }
         return finalize(stitcher)
+    }
+
+    private func checkpointIfNeeded(
+        samples: [FrameOCRSample],
+        processedFrames: Int,
+        checkpointEveryFrames: Int,
+        onCheckpoint: ((PipelineCheckpointSnapshot) async -> Void)?
+    ) async {
+        guard let onCheckpoint,
+              checkpointEveryFrames > 0,
+              processedFrames > 0,
+              processedFrames % checkpointEveryFrames == 0,
+              let latest = samples.last else {
+            return
+        }
+        await onCheckpoint(
+            PipelineCheckpointSnapshot(
+                timestamp: latest.timestamp,
+                processedFrames: processedFrames,
+                baseSamples: samples.map(\.checkpoint)
+            )
+        )
     }
 
     private func finalize(_ stitcher: Stitcher) -> Transcript {

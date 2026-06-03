@@ -24,9 +24,9 @@ struct PipelinePhaseTests {
         let pipeline = Pipeline(video: source, ocr: ocr, config: PipelineConfig(fps: 1.0))
 
         var progressEvents: [PipelineProgress] = []
-        let transcript = try await pipeline.run { progress in
+        let transcript = try await pipeline.run(onProgress: { progress in
             progressEvents.append(progress)
-        }
+        })
 
         #expect(transcript.lines == ["Header", "Alpha receipt", "Beta invoice", "Gamma summary"])
         #expect(transcript.sourceVideo == source.sourceURL)
@@ -53,9 +53,9 @@ struct PipelinePhaseTests {
         )
 
         var progressEvents: [PipelineProgress] = []
-        let transcript = try await pipeline.run { progress in
+        let transcript = try await pipeline.run(onProgress: { progress in
             progressEvents.append(progress)
-        }
+        })
 
         #expect(transcript.lines == ["First unique row", "Second unique row"])
         #expect(ocr.detectedFrameIndices == [0, 2])
@@ -98,9 +98,9 @@ struct PipelinePhaseTests {
         )
 
         var lastProgress: PipelineProgress?
-        let transcript = try await pipeline.run { progress in
+        let transcript = try await pipeline.run(onProgress: { progress in
             lastProgress = progress
-        }
+        })
 
         #expect(transcript.lines.count == frameCount)
         #expect(lastProgress?.processedFrames == frameCount)
@@ -168,6 +168,47 @@ struct PipelinePhaseTests {
         } catch is CancellationError {
             #expect(ocr.detectCount < 1_000)
         }
+    }
+
+    @Test func pipelineResumeUsesCheckpointedSamplesWithoutRedoingOCR() async throws {
+        let source = TimedMockVideoSource(durationSeconds: 3)
+        let ocr = TimestampTextOCRBackend()
+        let savedLine = Line(
+            text: "Saved first frame",
+            bbox: BBox(x: 0, y: 0, w: 80, h: 12),
+            confidence: 1
+        )
+        let resumeState = PipelineResumeState(
+            baseSamples: [
+                PipelineFrameCheckpoint(
+                    idx: 0,
+                    timestamp: 0,
+                    frameHeight: 100,
+                    lines: [PipelineLineCheckpoint(line: savedLine)],
+                    didOCR: true,
+                    averageConfidence: 1,
+                    coverageMinY: 0,
+                    coverageMaxY: 0.12,
+                    coverageAreaRatio: 0.1,
+                    dy: nil,
+                    scrollStateRawValue: nil,
+                    shouldAppendNew: true
+                ),
+            ],
+            startSeconds: 1
+        )
+        let pipeline = Pipeline(video: source, ocr: ocr, config: PipelineConfig(fps: 1.0))
+
+        let transcript = try await pipeline.run(resumeState: resumeState)
+
+        #expect(
+            transcript.lines == [
+                "Saved first frame",
+                distinctSubtitleText(forFrame: 1_000),
+                distinctSubtitleText(forFrame: 2_000),
+            ]
+        )
+        #expect(await ocr.detectedTimestamps() == [1, 2])
     }
 }
 
@@ -245,6 +286,36 @@ private final class TimestampOCRBackend: OCRBackend {
         return [
             Line(text: "Middle important detail", bbox: BBox(x: 0, y: 18, w: 80, h: 10), confidence: 1),
         ]
+    }
+}
+
+private final class TimestampTextOCRBackend: OCRBackend {
+    private let recorder = TimestampRecorder()
+
+    func detectedTimestamps() async -> [Double] {
+        await recorder.values
+    }
+
+    func detect(in frame: VideoFrame) async throws -> [Line] {
+        await recorder.append(frame.timestamp)
+
+        return [
+            Line(
+                text: distinctSubtitleText(forFrame: Int(frame.timestamp * 1000)),
+                bbox: BBox(x: 0, y: 0, w: 80, h: 12),
+                confidence: 1
+            ),
+        ]
+    }
+}
+
+private actor TimestampRecorder {
+    private var timestamps: [Double] = []
+
+    var values: [Double] { timestamps }
+
+    func append(_ timestamp: Double) {
+        timestamps.append(timestamp)
     }
 }
 

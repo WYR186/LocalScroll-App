@@ -266,5 +266,5 @@ private struct QueueRow: View {
 
 #Preview {
     ContentView()
-        .modelContainer(for: HistoryRecord.self, inMemory: true)
+        .modelContainer(for: [HistoryRecord.self, ProcessingCheckpoint.self], inMemory: true)
 }

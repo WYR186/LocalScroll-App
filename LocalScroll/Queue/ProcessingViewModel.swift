@@ -23,6 +23,10 @@ final class ProcessingViewModel: ObservableObject {
     @Published private(set) var focusExtractToken = 0
 
     private var task: Task<Void, Never>?
+    private var backgroundTask: BackgroundTaskController?
+    private var backgroundExpirationRequested = false
+    private let liveActivity = ProcessingLiveActivityController()
+    private var notificationObservers: [NSObjectProtocol] = []
     /// Incremented whenever the current task is externally interrupted (pause / delete).
     /// Lets the old task's cleanup closure detect that it's been superseded.
     private var taskGeneration: Int = 0
@@ -33,12 +37,47 @@ final class ProcessingViewModel: ObservableObject {
         UserDefaults.standard.bool(forKey: SettingsKeys.cacheOriginalVideos)
     }
 
+    init() {
+        notificationObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: .localScrollBackgroundProcessingRequested,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in
+                    self?.restoreCheckpointedItems()
+                    self?.startIfNeeded()
+                }
+            }
+        )
+        notificationObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: .localScrollBackgroundProcessingExpired,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in
+                    self?.pauseCurrentForBackgroundExpiration()
+                }
+            }
+        )
+    }
+
+    deinit {
+        for observer in notificationObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
+
     var hasFinishedItems: Bool {
         queue.contains { $0.isFinished }
     }
 
     func attach(context: ModelContext) {
         modelContext = context
+        restoreCheckpointedItems()
+        BackgroundProcessingScheduler.shared.schedule()
+        startIfNeeded()
     }
 
     // MARK: - Enqueue
@@ -80,10 +119,13 @@ final class ProcessingViewModel: ObservableObject {
         taskGeneration += 1
         task?.cancel()
         task = nil
+        backgroundTask?.end()
+        backgroundTask = nil
         isRunning = false
         for item in queue where item.status == .processing {
             item.status = .failed("Canceled")
             item.statusText = "Canceled"
+            deleteCheckpoint(for: item)
         }
     }
 
@@ -104,11 +146,12 @@ final class ProcessingViewModel: ObservableObject {
         switch item.status {
         case .processing:
             item.status = .paused
-            item.statusText = "Paused — will restart from beginning"
-            item.progressFraction = 0
+            item.statusText = "Paused — progress saved"
             taskGeneration += 1
             task?.cancel()
             task = nil
+            backgroundTask?.end()
+            backgroundTask = nil
             isRunning = false
             startIfNeeded()   // continue with remaining pending items
         case .pending:
@@ -141,8 +184,11 @@ final class ProcessingViewModel: ObservableObject {
             taskGeneration += 1
             task?.cancel()
             task = nil
+            backgroundTask?.end()
+            backgroundTask = nil
             isRunning = false
         }
+        deleteCheckpoint(for: item)
         queue.removeAll { $0.id == item.id }
         startIfNeeded()   // no-op if nothing is pending
     }
@@ -153,7 +199,12 @@ final class ProcessingViewModel: ObservableObject {
             taskGeneration += 1
             task?.cancel()
             task = nil
+            backgroundTask?.end()
+            backgroundTask = nil
             isRunning = false
+        }
+        for item in targets {
+            deleteCheckpoint(for: item)
         }
         queue.remove(atOffsets: offsets)
         startIfNeeded()
@@ -178,6 +229,7 @@ final class ProcessingViewModel: ObservableObject {
                 guard let self, self.taskGeneration == gen else { return }
                 self.isRunning = false
                 self.task = nil
+                BackgroundProcessingScheduler.shared.complete(success: true)
             }
         }
     }
@@ -191,26 +243,89 @@ final class ProcessingViewModel: ObservableObject {
 
     private func process(_ item: QueueItem) async {
         item.status = .processing
-        item.progressFraction = 0
+        backgroundExpirationRequested = false
         item.statusText = "Importing video..."
 
         var tempURLToDelete: URL?
+        var checkpoint: ProcessingCheckpoint?
+        var processingFileNameToDelete: String?
         do {
             // 1. Resolve the video URL.
             let videoURL: URL
             let preCachedFileName: String?
+            let resumeState: PipelineResumeState?
             switch item.source {
             case .picker(let pickerItem):
                 guard let movie = try await pickerItem.loadTransferable(type: SelectedMovie.self) else {
                     throw LocalScrollUIError.videoImportFailed
                 }
-                videoURL = movie.url
+                let processingFileName = try ProcessingVideoStore.store(videoURL: movie.url)
+                guard let storedURL = ProcessingVideoStore.url(for: processingFileName) else {
+                    throw LocalScrollUIError.videoImportFailed
+                }
+                let newCheckpoint = ProcessingCheckpoint(
+                    displayName: item.displayName,
+                    processingVideoFileName: processingFileName,
+                    preCachedVideoFileName: nil,
+                    qualityPreset: item.qualityPreset,
+                    captionMode: item.captionMode,
+                    cleanupEnabled: item.cleanupEnabled
+                )
+                modelContext?.insert(newCheckpoint)
+                try? modelContext?.save()
+                checkpoint = newCheckpoint
+                videoURL = storedURL
                 tempURLToDelete = movie.url
                 preCachedFileName = nil
+                resumeState = nil
             case .cachedVideo(let url, let fileName):
-                videoURL = url
+                let processingFileName = try ProcessingVideoStore.store(videoURL: url)
+                guard let storedURL = ProcessingVideoStore.url(for: processingFileName) else {
+                    throw LocalScrollUIError.videoImportFailed
+                }
+                let newCheckpoint = ProcessingCheckpoint(
+                    displayName: item.displayName,
+                    processingVideoFileName: processingFileName,
+                    preCachedVideoFileName: fileName,
+                    qualityPreset: item.qualityPreset,
+                    captionMode: item.captionMode,
+                    cleanupEnabled: item.cleanupEnabled
+                )
+                modelContext?.insert(newCheckpoint)
+                try? modelContext?.save()
+                checkpoint = newCheckpoint
+                videoURL = storedURL
                 preCachedFileName = fileName
+                resumeState = nil
+            case .checkpoint(let savedCheckpoint):
+                guard let storedURL = ProcessingVideoStore.url(for: savedCheckpoint.processingVideoFileName) else {
+                    throw LocalScrollUIError.checkpointVideoMissing
+                }
+                checkpoint = savedCheckpoint
+                videoURL = storedURL
+                preCachedFileName = savedCheckpoint.preCachedVideoFileName
+                item.progressFraction = savedCheckpoint.progressFraction
+                let samples = savedCheckpoint.decodedSamples
+                let startSeconds = samples.last.map {
+                    $0.timestamp + max(0.01, 0.5 / max(1, item.qualityPreset.fps))
+                } ?? savedCheckpoint.lastTimestamp
+                resumeState = PipelineResumeState(
+                    baseSamples: samples,
+                    startSeconds: startSeconds
+                )
             }
+            processingFileNameToDelete = checkpoint?.processingVideoFileName
+
+            backgroundTask = BackgroundTaskController()
+            backgroundTask?.begin(name: "LocalScroll video processing") { [weak self, weak item] in
+                guard let self else { return }
+                pauseCurrentForBackgroundExpiration(item: item)
+            }
+            liveActivity.start(
+                videoName: item.displayName,
+                progress: item.progressFraction,
+                status: item.statusText
+            )
 
             // 2. Build + run the pipeline.
             item.statusText = "Preparing frames..."
@@ -219,13 +334,34 @@ final class ProcessingViewModel: ObservableObject {
                 preset: item.qualityPreset,
                 captionMode: item.captionMode
             )
-            let result = try await pipeline.run { [weak item] progress in
+            let result = try await pipeline.run(
+                resumeState: resumeState,
+                checkpointEveryFrames: 12,
+                onCheckpoint: { [weak self, weak item, weak checkpoint] snapshot in
+                    await MainActor.run {
+                        guard let self, let item, let checkpoint else { return }
+                        checkpoint.update(
+                            with: snapshot,
+                            progressFraction: item.progressFraction
+                        )
+                        try? self.modelContext?.save()
+                        BackgroundProcessingScheduler.shared.schedule()
+                    }
+                },
+                onProgress: { [weak item] progress in
                 await MainActor.run {
                     guard let item else { return }
                     item.progressFraction = progress.fractionCompleted
                     item.statusText = Self.progressText(progress)
+                    Task {
+                        await self.liveActivity.update(
+                            progress: item.progressFraction,
+                            status: item.statusText
+                        )
+                    }
                 }
-            }
+                }
+            )
 
             // 3. Optional AI cleanup.
             var rawLines = result.lines
@@ -268,6 +404,9 @@ final class ProcessingViewModel: ObservableObject {
                 cachedVideoFileName: cachedFileName
             )
             modelContext?.insert(record)
+            if let checkpoint {
+                modelContext?.delete(checkpoint)
+            }
             try? modelContext?.save()
 
             lastFinishedName = item.displayName
@@ -275,20 +414,31 @@ final class ProcessingViewModel: ObservableObject {
             item.progressFraction = 1
             item.statusText = record.lineCount == 1 ? "1 line" : "\(record.lineCount) lines"
             item.status = .done
+            await liveActivity.end(progress: 1, status: item.statusText)
+            if let processingFileNameToDelete {
+                ProcessingVideoStore.delete(processingFileNameToDelete)
+            }
         } catch is CancellationError {
-            // pauseItem() already set status to .paused — don't overwrite it.
-            if item.status == .processing {
+            if backgroundExpirationRequested {
+                item.status = .paused
+                item.statusText = "Paused — progress saved"
+                await liveActivity.end(progress: item.progressFraction, status: item.statusText)
+            } else if item.status == .processing {
                 item.status = .failed("Canceled")
                 item.statusText = "Canceled"
+                await liveActivity.end(progress: item.progressFraction, status: item.statusText)
             }
         } catch {
             item.status = .failed(error.localizedDescription)
+            await liveActivity.end(progress: item.progressFraction, status: item.statusText)
         }
 
         // Clean up the temp import unless it was cached (caching makes its own copy).
         if let tempURLToDelete {
             try? FileManager.default.removeItem(at: tempURLToDelete)
         }
+        backgroundTask?.end()
+        backgroundTask = nil
     }
 
     // MARK: - Helpers
@@ -339,6 +489,59 @@ final class ProcessingViewModel: ObservableObject {
         }
         return chunks.joined(separator: " - ")
     }
+
+    private func restoreCheckpointedItems() {
+        guard let modelContext else { return }
+        let descriptor = FetchDescriptor<ProcessingCheckpoint>(
+            sortBy: [SortDescriptor(\.updatedAt)]
+        )
+        guard let checkpoints = try? modelContext.fetch(descriptor), !checkpoints.isEmpty else {
+            return
+        }
+
+        let existingIDs: Set<UUID> = Set(queue.compactMap { item in
+            if case .checkpoint(let checkpoint) = item.source {
+                return checkpoint.id
+            }
+            return nil
+        })
+        for checkpoint in checkpoints where !existingIDs.contains(checkpoint.id) {
+            let preset = QualityPreset(rawValue: checkpoint.qualityPreset) ?? .smart
+            let item = QueueItem(
+                source: .checkpoint(checkpoint),
+                displayName: checkpoint.displayName,
+                qualityPreset: preset,
+                captionMode: checkpoint.captionMode,
+                cleanupEnabled: checkpoint.cleanupEnabled
+            )
+            item.progressFraction = checkpoint.progressFraction
+            item.statusText = "Resume ready"
+            queue.append(item)
+        }
+    }
+
+    private func deleteCheckpoint(for item: QueueItem) {
+        guard case .checkpoint(let checkpoint) = item.source else { return }
+        ProcessingVideoStore.delete(checkpoint.processingVideoFileName)
+        modelContext?.delete(checkpoint)
+        try? modelContext?.save()
+    }
+
+    private func pauseCurrentForBackgroundExpiration(item: QueueItem? = nil) {
+        backgroundExpirationRequested = true
+        let currentItem = item ?? queue.first { $0.status == .processing }
+        if let currentItem {
+            currentItem.status = .paused
+            currentItem.statusText = "Paused — progress saved"
+        }
+        taskGeneration += 1
+        task?.cancel()
+        task = nil
+        isRunning = false
+        backgroundTask?.end()
+        backgroundTask = nil
+        BackgroundProcessingScheduler.shared.schedule()
+    }
 }
 
 enum SettingsKeys {
@@ -349,11 +552,14 @@ enum SettingsKeys {
 
 enum LocalScrollUIError: Error, LocalizedError {
     case videoImportFailed
+    case checkpointVideoMissing
 
     var errorDescription: String? {
         switch self {
         case .videoImportFailed:
             return "Could not import the selected video."
+        case .checkpointVideoMissing:
+            return "The saved processing video is missing."
         }
     }
 }

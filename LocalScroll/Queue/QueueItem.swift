@@ -21,6 +21,7 @@ final class QueueItem: ObservableObject, Identifiable {
     enum Source {
         case picker(PhotosPickerItem)
         case cachedVideo(url: URL, fileName: String)
+        case checkpoint(ProcessingCheckpoint)
     }
 
     let source: Source
