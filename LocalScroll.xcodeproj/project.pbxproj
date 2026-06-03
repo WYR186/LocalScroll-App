@@ -7,6 +7,13 @@
 	objects = {
 
 /* Begin PBXContainerItemProxy section */
+		A1B2C3D42FD1000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 5FED808C2FCF5714005E28C1 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A1B2C3D42FD1000000000006;
+			remoteInfo = LocalScrollWidget;
+		};
 		5FED80A82FCF5715005E28C1 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 5FED808C2FCF5714005E28C1 /* Project object */;
@@ -24,16 +31,37 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXBuildFile section */
+		A1B2C3D42FD1000000000002 /* LocalScrollWidget.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = A1B2C3D42FD1000000000003 /* LocalScrollWidget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, CodeSignOnCopy, ); }; };
 		5FED80C72FCF63BF005E28C1 /* LocalScrollCore in Frameworks */ = {isa = PBXBuildFile; productRef = 5FED80C62FCF63BF005E28C1 /* LocalScrollCore */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		A1B2C3D42FD100000000000A /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				A1B2C3D42FD1000000000002 /* LocalScrollWidget.appex in Embed App Extensions */,
+			);
+			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		5FED80942FCF5714005E28C1 /* LocalScroll.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LocalScroll.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		5FED80A72FCF5715005E28C1 /* LocalScrollTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LocalScrollTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		5FED80B12FCF5715005E28C1 /* LocalScrollUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LocalScrollUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A1B2C3D42FD1000000000003 /* LocalScrollWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = LocalScrollWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		A1B2C3D42FD1000000000004 /* LocalScrollWidget */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = LocalScrollWidget;
+			sourceTree = "<group>";
+		};
 		5FED80962FCF5714005E28C1 /* LocalScroll */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = LocalScroll;
@@ -52,6 +80,13 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		A1B2C3D42FD1000000000005 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		5FED80912FCF5714005E28C1 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -81,6 +116,7 @@
 			isa = PBXGroup;
 			children = (
 				5FED80962FCF5714005E28C1 /* LocalScroll */,
+				A1B2C3D42FD1000000000004 /* LocalScrollWidget */,
 				5FED80AA2FCF5715005E28C1 /* LocalScrollTests */,
 				5FED80B42FCF5715005E28C1 /* LocalScrollUITests */,
 				5FED80952FCF5714005E28C1 /* Products */,
@@ -91,6 +127,7 @@
 			isa = PBXGroup;
 			children = (
 				5FED80942FCF5714005E28C1 /* LocalScroll.app */,
+				A1B2C3D42FD1000000000003 /* LocalScrollWidget.appex */,
 				5FED80A72FCF5715005E28C1 /* LocalScrollTests.xctest */,
 				5FED80B12FCF5715005E28C1 /* LocalScrollUITests.xctest */,
 			);
@@ -107,10 +144,12 @@
 				5FED80902FCF5714005E28C1 /* Sources */,
 				5FED80912FCF5714005E28C1 /* Frameworks */,
 				5FED80922FCF5714005E28C1 /* Resources */,
+				A1B2C3D42FD100000000000A /* Embed App Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				A1B2C3D42FD1000000000009 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				5FED80962FCF5714005E28C1 /* LocalScroll */,
@@ -122,6 +161,28 @@
 			productName = LocalScroll;
 			productReference = 5FED80942FCF5714005E28C1 /* LocalScroll.app */;
 			productType = "com.apple.product-type.application";
+		};
+		A1B2C3D42FD1000000000006 /* LocalScrollWidget */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A1B2C3D42FD100000000000D /* Build configuration list for PBXNativeTarget "LocalScrollWidget" */;
+			buildPhases = (
+				A1B2C3D42FD1000000000008 /* Sources */,
+				A1B2C3D42FD1000000000005 /* Frameworks */,
+				A1B2C3D42FD1000000000007 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				A1B2C3D42FD1000000000004 /* LocalScrollWidget */,
+			);
+			name = LocalScrollWidget;
+			packageProductDependencies = (
+			);
+			productName = LocalScrollWidget;
+			productReference = A1B2C3D42FD1000000000003 /* LocalScrollWidget.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 		5FED80A62FCF5715005E28C1 /* LocalScrollTests */ = {
 			isa = PBXNativeTarget;
@@ -179,6 +240,9 @@
 				LastSwiftUpdateCheck = 1620;
 				LastUpgradeCheck = 1620;
 				TargetAttributes = {
+					A1B2C3D42FD1000000000006 = {
+						CreatedOnToolsVersion = 16.2;
+					};
 					5FED80932FCF5714005E28C1 = {
 						CreatedOnToolsVersion = 16.2;
 					};
@@ -210,6 +274,7 @@
 			projectRoot = "";
 			targets = (
 				5FED80932FCF5714005E28C1 /* LocalScroll */,
+				A1B2C3D42FD1000000000006 /* LocalScrollWidget */,
 				5FED80A62FCF5715005E28C1 /* LocalScrollTests */,
 				5FED80B02FCF5715005E28C1 /* LocalScrollUITests */,
 			);
@@ -217,6 +282,13 @@
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		A1B2C3D42FD1000000000007 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		5FED80922FCF5714005E28C1 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -241,6 +313,13 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		A1B2C3D42FD1000000000008 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		5FED80902FCF5714005E28C1 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -265,6 +344,11 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		A1B2C3D42FD1000000000009 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A1B2C3D42FD1000000000006 /* LocalScrollWidget */;
+			targetProxy = A1B2C3D42FD1000000000001 /* PBXContainerItemProxy */;
+		};
 		5FED80A92FCF5715005E28C1 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = 5FED80932FCF5714005E28C1 /* LocalScroll */;
@@ -278,6 +362,60 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		A1B2C3D42FD100000000000B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = R48B46NC85;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "LocalScrollWidget-Info.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.2;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "Aaron-Wang.LocalScroll.LocalScrollWidget";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		A1B2C3D42FD100000000000C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = R48B46NC85;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "LocalScrollWidget-Info.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.2;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "Aaron-Wang.LocalScroll.LocalScrollWidget";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 		5FED80B92FCF5715005E28C1 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -539,6 +677,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		A1B2C3D42FD100000000000D /* Build configuration list for PBXNativeTarget "LocalScrollWidget" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A1B2C3D42FD100000000000B /* Debug */,
+				A1B2C3D42FD100000000000C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		5FED808F2FCF5714005E28C1 /* Build configuration list for PBXProject "LocalScroll" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

@@ -10,6 +10,7 @@ All notable LocalScroll iOS app changes are tracked here.
 - Added automatic restoration of unfinished processing jobs when the app starts or receives a background processing wake.
 - Added `beginBackgroundTask` support around active video processing so short jobs can keep running briefly after lock/background.
 - Added ActivityKit progress updates for the current video job; this exposes app-side Live Activity state without treating it as a background execution guarantee.
+- Added a WidgetKit Live Activity extension with Lock Screen and Dynamic Island progress views for active video processing.
 - Added BGProcessingTask registration and scheduling for best-effort long-video checkpoint continuation.
 - Added two-stage OCR coverage refinement: each extraction now runs a base pass, records per-frame OCR diagnostics, detects risky intervals, and performs higher-FPS supplemental OCR only inside those intervals.
 - Added risk detection for large scroll displacement, discontinuities, low OCR confidence, sudden OCR line drops, weak text overlap, and insufficient vertical bounding-box overlap.
