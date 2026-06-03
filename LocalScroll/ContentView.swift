@@ -53,11 +53,18 @@ struct ExtractView: View {
             }
             .navigationTitle("LocalScroll")
             .toolbar {
-                if model.isRunning {
-                    Button(role: .cancel) {
-                        model.cancel()
-                    } label: {
-                        Label("Cancel", systemImage: "xmark")
+                ToolbarItem(placement: .navigationBarLeading) {
+                    if !model.queue.isEmpty {
+                        EditButton()
+                    }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    if model.isRunning {
+                        Button(role: .cancel) {
+                            model.cancel()
+                        } label: {
+                            Label("Cancel All", systemImage: "xmark")
+                        }
                     }
                 }
             }
@@ -121,7 +128,13 @@ struct ExtractView: View {
             List {
                 Section {
                     ForEach(model.queue) { item in
-                        QueueRow(item: item)
+                        QueueRow(item: item) {
+                            model.togglePause(item)
+                        }
+                    }
+                    .onMove(perform: model.move)
+                    .onDelete { offsets in
+                        model.delete(at: offsets)
                     }
                 } header: {
                     HStack {
@@ -155,17 +168,24 @@ struct ExtractView: View {
 
 private struct QueueRow: View {
     @ObservedObject var item: QueueItem
+    @Environment(\.editMode) private var editMode
+    let onTogglePause: () -> Void
+
+    private var isEditing: Bool { editMode?.wrappedValue.isEditing == true }
 
     var body: some View {
         HStack(spacing: 12) {
             statusIcon
                 .frame(width: 24)
+
             VStack(alignment: .leading, spacing: 4) {
                 Text(item.displayName)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 if item.status == .processing {
                     ProgressView(value: item.progressFraction)
+                        .progressViewStyle(.linear)
+                        .animation(.linear(duration: 0.3), value: item.progressFraction)
                 }
                 if !item.statusText.isEmpty {
                     Text(item.statusText)
@@ -174,20 +194,72 @@ private struct QueueRow: View {
                         .lineLimit(1)
                 }
             }
+
+            Spacer()
+
+            // Pause / resume button — hidden while drag-handles are showing.
+            if !isEditing {
+                actionButton
+            }
         }
+        .padding(.vertical, 2)
     }
+
+    // MARK: Status icon (left)
 
     @ViewBuilder
     private var statusIcon: some View {
         switch item.status {
         case .pending:
-            Image(systemName: "clock").foregroundStyle(.secondary)
+            Image(systemName: "clock")
+                .foregroundStyle(.secondary)
         case .processing:
             ProgressView()
+                .progressViewStyle(.circular)
+                .scaleEffect(0.75)
+        case .paused:
+            Image(systemName: "pause.circle.fill")
+                .foregroundStyle(.orange)
         case .done:
-            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(.green)
         case .failed:
-            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red)
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.red)
+        }
+    }
+
+    // MARK: Action button (right)
+
+    @ViewBuilder
+    private var actionButton: some View {
+        switch item.status {
+        case .processing:
+            Button(action: onTogglePause) {
+                Image(systemName: "pause.circle.fill")
+                    .font(.title2)
+                    .foregroundStyle(.orange)
+            }
+            .buttonStyle(.plain)
+
+        case .paused:
+            Button(action: onTogglePause) {
+                Image(systemName: "play.circle.fill")
+                    .font(.title2)
+                    .foregroundStyle(Color.accentColor)
+            }
+            .buttonStyle(.plain)
+
+        case .pending:
+            Button(action: onTogglePause) {
+                Image(systemName: "pause.circle")
+                    .font(.title2)
+                    .foregroundStyle(.tertiary)
+            }
+            .buttonStyle(.plain)
+
+        default:
+            EmptyView()
         }
     }
 }

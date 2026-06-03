@@ -23,6 +23,9 @@ final class ProcessingViewModel: ObservableObject {
     @Published private(set) var focusExtractToken = 0
 
     private var task: Task<Void, Never>?
+    /// Incremented whenever the current task is externally interrupted (pause / delete).
+    /// Lets the old task's cleanup closure detect that it's been superseded.
+    private var taskGeneration: Int = 0
     private weak var modelContext: ModelContext?
 
     /// Whether the original video should be cached for re-processing.
@@ -74,11 +77,13 @@ final class ProcessingViewModel: ObservableObject {
     // MARK: - Queue control
 
     func cancel() {
+        taskGeneration += 1
         task?.cancel()
         task = nil
         isRunning = false
         for item in queue where item.status == .processing {
             item.status = .failed("Canceled")
+            item.statusText = "Canceled"
         }
     }
 
@@ -91,16 +96,88 @@ final class ProcessingViewModel: ObservableObject {
         queue.removeAll()
     }
 
+    // MARK: - Per-item pause / resume
+
+    /// Pauses the given item. If it is currently processing, the running task is
+    /// cancelled and the queue moves on to the next pending item automatically.
+    func pauseItem(_ item: QueueItem) {
+        switch item.status {
+        case .processing:
+            item.status = .paused
+            item.statusText = "Paused — will restart from beginning"
+            item.progressFraction = 0
+            taskGeneration += 1
+            task?.cancel()
+            task = nil
+            isRunning = false
+            startIfNeeded()   // continue with remaining pending items
+        case .pending:
+            item.status = .paused
+            item.statusText = "Paused"
+        default:
+            break
+        }
+    }
+
+    func resumeItem(_ item: QueueItem) {
+        guard item.status == .paused else { return }
+        item.status = .pending
+        item.statusText = ""
+        startIfNeeded()
+    }
+
+    func togglePause(_ item: QueueItem) {
+        switch item.status {
+        case .processing, .pending: pauseItem(item)
+        case .paused:               resumeItem(item)
+        default:                    break
+        }
+    }
+
+    // MARK: - Per-item delete + reorder
+
+    func deleteItem(_ item: QueueItem) {
+        if item.status == .processing {
+            taskGeneration += 1
+            task?.cancel()
+            task = nil
+            isRunning = false
+        }
+        queue.removeAll { $0.id == item.id }
+        startIfNeeded()   // no-op if nothing is pending
+    }
+
+    func delete(at offsets: IndexSet) {
+        let targets = offsets.map { queue[$0] }
+        for item in targets where item.status == .processing {
+            taskGeneration += 1
+            task?.cancel()
+            task = nil
+            isRunning = false
+        }
+        queue.remove(atOffsets: offsets)
+        startIfNeeded()
+    }
+
+    func move(from source: IndexSet, to destination: Int) {
+        queue.move(fromOffsets: source, toOffset: destination)
+    }
+
     // MARK: - Processing loop
 
     private func startIfNeeded() {
         guard task == nil else { return }
+        guard queue.contains(where: { $0.status == .pending }) else { return }
         isRunning = true
+        let gen = taskGeneration
         task = Task { [weak self] in
             await self?.runLoop()
             await MainActor.run {
-                self?.isRunning = false
-                self?.task = nil
+                // Only clean up if this is still the current task generation;
+                // prevents a superseded task from nilling a replacement task.
+                guard let self, self.taskGeneration == gen else { return }
+                self.isRunning = false
+                self.task = nil
             }
         }
     }
@@ -199,7 +276,11 @@ final class ProcessingViewModel: ObservableObject {
             item.statusText = record.lineCount == 1 ? "1 line" : "\(record.lineCount) lines"
             item.status = .done
         } catch is CancellationError {
-            item.status = .failed("Canceled")
+            // pauseItem() already set status to .paused — don't overwrite it.
+            if item.status == .processing {
+                item.status = .failed("Canceled")
+                item.statusText = "Canceled"
+            }
         } catch {
             item.status = .failed(error.localizedDescription)
         }
@@ -255,6 +336,7 @@ final class ProcessingViewModel: ObservableObject {
 
 enum SettingsKeys {
     static let cacheOriginalVideos = "cacheOriginalVideos"
+    static let appearance          = "appearance"
 }
 
 enum LocalScrollUIError: Error, LocalizedError {

@@ -9,6 +9,7 @@ final class QueueItem: ObservableObject, Identifiable {
     enum Status: Equatable {
         case pending
         case processing
+        case paused
         case done
         case failed(String)
     }
@@ -49,7 +50,7 @@ final class QueueItem: ObservableObject, Identifiable {
     var isFinished: Bool {
         switch status {
         case .done, .failed: return true
-        case .pending, .processing: return false
+        case .pending, .processing, .paused: return false
         }
     }
 }
