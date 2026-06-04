@@ -1,6 +1,23 @@
 import CoreGraphics
 import CoreImage
 import Foundation
+import Metal
+
+/// Process-wide Core Image render context.
+///
+/// Constructing a `CIContext` allocates GPU resources, so the whole app shares a
+/// single Metal-backed context across frame decoding, OCR preprocessing, and
+/// optical-flow downscaling instead of creating a fresh context per frame, clip,
+/// or refinement interval. `CIContext` is documented as thread-safe, so the
+/// concurrent OCR task group and the decode actor can render through it safely.
+public enum SharedRenderContext {
+    public static let ci: CIContext = {
+        if let device = MTLCreateSystemDefaultDevice() {
+            return CIContext(mtlDevice: device)
+        }
+        return CIContext()
+    }()
+}
 
 public struct CoreImagePreprocessorConfig: Sendable {
     public var scale: Double
@@ -30,16 +47,15 @@ public final class CoreImagePreprocessor: FramePreprocessor {
 
     public init(
         config: CoreImagePreprocessorConfig = CoreImagePreprocessorConfig(),
-        context: CIContext = CIContext()
+        context: CIContext = SharedRenderContext.ci
     ) {
         self.config = config
         self.context = context
     }
 
     public func process(_ frame: VideoFrame) async throws -> VideoFrame {
-        try await Task.detached(priority: .userInitiated) { [config, context] in
-            let input = CIImage(cgImage: frame.image)
-            var output = input
+        await Task.detached(priority: .userInitiated) { [config] in
+            var output = frame.ciImage
 
             if config.scale > 0, config.scale != 1 {
                 output = output.applyingFilter(
@@ -68,12 +84,22 @@ public final class CoreImagePreprocessor: FramePreprocessor {
                 ]
             )
 
+            // Keep the result lazy and normalized to the origin; Vision renders
+            // it once during OCR instead of round-tripping through a CGImage.
             let extent = output.extent.integral
-            guard let image = context.createCGImage(output, from: extent) else {
-                throw CoreImagePreprocessorError.renderFailed
-            }
-
-            return VideoFrame(idx: frame.idx, timestamp: frame.timestamp, image: image)
+            let normalized = extent.origin == .zero
+                ? output
+                : output.transformed(
+                    by: CGAffineTransform(translationX: -extent.origin.x, y: -extent.origin.y)
+                )
+            let pixelExtent = normalized.extent.integral
+            return VideoFrame(
+                idx: frame.idx,
+                timestamp: frame.timestamp,
+                ciImage: normalized,
+                pixelWidth: Int(pixelExtent.width),
+                pixelHeight: Int(pixelExtent.height)
+            )
         }.value
     }
 }

@@ -395,49 +395,35 @@ public final class Pipeline {
     ) async throws -> SampleCollection {
         var samples = initialSamples
         var processedFrames = 0
-        var iterator = stream.makeAsyncIterator()
 
-        while true {
-            try Task.checkCancellation()
-            var batch: [VideoFrame] = []
-            batch.reserveCapacity(config.ocrConcurrency)
-            for _ in 0..<config.ocrConcurrency {
-                if let frame = try await iterator.next() {
-                    batch.append(frame)
-                } else {
-                    break
-                }
-            }
-            guard !batch.isEmpty else { break }
-
-            let results = try await recognizeBatch(batch)
-            for result in results {
-                try Task.checkCancellation()
-                let sample = makeSample(
-                    from: result,
-                    dy: nil,
-                    scrollState: nil,
-                    shouldAppendNew: true
-                )
-                samples.append(sample)
-                processedFrames += 1
-                await onProgress?(
-                    PipelineProgress(
-                        processedFrames: processedOffset + processedFrames,
-                        skippedFrames: skippedFrames,
-                        expectedFrames: expectedFrames,
-                        timestamp: result.frame.timestamp,
-                        recognizedLines: result.lines.count,
-                        scrollState: nil
-                    )
-                )
-                await checkpointIfNeeded(
-                    samples: samples,
+        try await runConcurrentOCR(
+            stream: stream,
+            maxConcurrency: config.ocrConcurrency
+        ) { result in
+            let sample = makeSample(
+                from: result,
+                dy: nil,
+                scrollState: nil,
+                shouldAppendNew: true
+            )
+            samples.append(sample)
+            processedFrames += 1
+            await onProgress?(
+                PipelineProgress(
                     processedFrames: processedOffset + processedFrames,
-                    checkpointEveryFrames: checkpointEveryFrames,
-                    onCheckpoint: onCheckpoint
+                    skippedFrames: skippedFrames,
+                    expectedFrames: expectedFrames,
+                    timestamp: result.frame.timestamp,
+                    recognizedLines: result.lines.count,
+                    scrollState: nil
                 )
-            }
+            )
+            await checkpointIfNeeded(
+                samples: samples,
+                processedFrames: processedOffset + processedFrames,
+                checkpointEveryFrames: checkpointEveryFrames,
+                onCheckpoint: onCheckpoint
+            )
         }
 
         return SampleCollection(samples: samples, processedFrames: processedFrames)
@@ -492,40 +478,26 @@ public final class Pipeline {
         var stitcher = Stitcher(config: config.stitchConfig)
         var processedFrames = 0
 
-        var iterator = video.frames(targetFPS: config.fps).makeAsyncIterator()
-        while true {
-            try Task.checkCancellation()
-            var batch: [VideoFrame] = []
-            batch.reserveCapacity(config.ocrConcurrency)
-            for _ in 0..<config.ocrConcurrency {
-                if let frame = try await iterator.next() {
-                    batch.append(frame)
-                } else {
-                    break
-                }
-            }
-            guard !batch.isEmpty else { break }
-
-            let results = try await recognizeBatch(batch)
-            for result in results {
-                try Task.checkCancellation()
-                stitcher.consume(
-                    result.lines,
-                    frameIdx: result.frame.idx,
-                    timestamp: result.frame.timestamp
+        try await runConcurrentOCR(
+            stream: video.frames(targetFPS: config.fps),
+            maxConcurrency: config.ocrConcurrency
+        ) { result in
+            stitcher.consume(
+                result.lines,
+                frameIdx: result.frame.idx,
+                timestamp: result.frame.timestamp
+            )
+            processedFrames += 1
+            await onProgress?(
+                PipelineProgress(
+                    processedFrames: processedFrames,
+                    skippedFrames: 0,
+                    expectedFrames: expectedFrames,
+                    timestamp: result.frame.timestamp,
+                    recognizedLines: result.lines.count,
+                    scrollState: nil
                 )
-                processedFrames += 1
-                await onProgress?(
-                    PipelineProgress(
-                        processedFrames: processedFrames,
-                        skippedFrames: 0,
-                        expectedFrames: expectedFrames,
-                        timestamp: result.frame.timestamp,
-                        recognizedLines: result.lines.count,
-                        scrollState: nil
-                    )
-                )
-            }
+            )
         }
 
         return finalize(stitcher)
@@ -721,37 +693,52 @@ public final class Pipeline {
         )
     }
 
-    private func recognizeBatch(_ frames: [VideoFrame]) async throws -> [OCRFrameResult] {
-        try await withThrowingTaskGroup(of: OCRFrameResult.self) { group in
-            for frame in frames {
-                group.addTask { [ocr, preprocessor] in
-                    try Task.checkCancellation()
+    /// Run OCR over a frame stream with bounded concurrency, delivering results
+    /// to `onResult` in the stream's original (ascending) order.
+    ///
+    /// Unlike a fixed batch, this keeps up to `maxConcurrency` OCR tasks in
+    /// flight continuously: as soon as one finishes it pulls and starts the next
+    /// decoded frame, so decoding overlaps OCR instead of stalling at every batch
+    /// boundary. A small reorder buffer restores frame order before stitching.
+    private func runConcurrentOCR(
+        stream: AsyncThrowingStream<VideoFrame, Error>,
+        maxConcurrency: Int,
+        onResult: (OCRFrameResult) async throws -> Void
+    ) async throws {
+        let concurrency = max(1, maxConcurrency)
+        try await withThrowingTaskGroup(of: (Int, OCRFrameResult).self) { group in
+            var iterator = stream.makeAsyncIterator()
+            var pullSeq = 0
+            var nextToEmit = 0
+            var inFlight = 0
+            var exhausted = false
+            var pending: [Int: OCRFrameResult] = [:]
 
-                    let ocrFrame: VideoFrame
-                    if let preprocessor {
-                        ocrFrame = try await preprocessor.process(frame)
-                        try Task.checkCancellation()
+            while true {
+                while inFlight < concurrency, !exhausted {
+                    try Task.checkCancellation()
+                    if let frame = try await iterator.next() {
+                        let seq = pullSeq
+                        pullSeq += 1
+                        inFlight += 1
+                        group.addTask { [self] in
+                            (seq, try await recognize(frame))
+                        }
                     } else {
-                        ocrFrame = frame
+                        exhausted = true
                     }
+                }
 
-                    let lines = try await ocr.detect(in: ocrFrame)
-                    try Task.checkCancellation()
-                    return OCRFrameResult(
-                        frame: frame,
-                        ocrWidth: ocrFrame.width,
-                        ocrHeight: ocrFrame.height,
-                        lines: lines
-                    )
+                guard inFlight > 0 else { break }
+
+                guard let (seq, result) = try await group.next() else { break }
+                inFlight -= 1
+                pending[seq] = result
+                while let ready = pending.removeValue(forKey: nextToEmit) {
+                    try await onResult(ready)
+                    nextToEmit += 1
                 }
             }
-
-            var results: [OCRFrameResult] = []
-            results.reserveCapacity(frames.count)
-            for try await result in group {
-                results.append(result)
-            }
-            return results.sorted { $0.frame.idx < $1.frame.idx }
         }
     }
 

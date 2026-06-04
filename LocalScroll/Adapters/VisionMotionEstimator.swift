@@ -40,18 +40,18 @@ public final class VisionMotionEstimator: MotionEstimator {
             }
 
             let scale = min(1.0, max(0.1, config.analysisScale))
-            let previousImage = try makeOpticalFlowImage(previous.image, scale: scale)
-            let currentImage = try makeOpticalFlowImage(current.image, scale: scale)
+            let previousImage = scaledCIImage(previous.ciImage, scale: scale)
+            let currentImage = scaledCIImage(current.ciImage, scale: scale)
 
             let request = VNGenerateOpticalFlowRequest(
-                targetedCGImage: currentImage,
+                targetedCIImage: currentImage,
                 options: [:],
                 completionHandler: nil
             )
             request.computationAccuracy = config.accuracy
             request.outputPixelFormat = kCVPixelFormatType_TwoComponent32Float
 
-            let handler = VNImageRequestHandler(cgImage: previousImage, orientation: .up, options: [:])
+            let handler = VNImageRequestHandler(ciImage: previousImage, orientation: .up, options: [:])
             try handler.perform([request])
 
             guard let observation = request.results?.first else {
@@ -92,23 +92,21 @@ public enum VisionMotionEstimatorError: Error, LocalizedError {
     }
 }
 
-private func makeOpticalFlowImage(_ image: CGImage, scale: Double) throws -> CGImage {
+private func scaledCIImage(_ image: CIImage, scale: Double) -> CIImage {
     guard scale < 0.999 else { return image }
 
-    let input = CIImage(cgImage: image)
-    let output = input.applyingFilter(
+    let scaled = image.applyingFilter(
         "CILanczosScaleTransform",
         parameters: [
             kCIInputScaleKey: scale,
             kCIInputAspectRatioKey: 1.0,
         ]
     )
-    let extent = output.extent.integral
-    let context = CIContext()
-    guard let image = context.createCGImage(output, from: extent) else {
-        throw VisionMotionEstimatorError.imageConversionFailed
-    }
-    return image
+    let extent = scaled.extent.integral
+    guard extent.origin != .zero else { return scaled }
+    return scaled.transformed(
+        by: CGAffineTransform(translationX: -extent.origin.x, y: -extent.origin.y)
+    )
 }
 
 private func medianDy(

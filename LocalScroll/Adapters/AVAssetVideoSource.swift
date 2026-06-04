@@ -96,7 +96,6 @@ private actor AVAssetFrameIterator {
     private var reader: AVAssetReader?
     private var output: AVAssetReaderTrackOutput?
     private var preferredTransform: CGAffineTransform = .identity
-    private var context: CIContext?
     private var frameCount: Int?
     private var baseIndex = 0
     private var nextIndex = 0
@@ -147,8 +146,7 @@ private actor AVAssetFrameIterator {
 
             let idx = baseIndex + nextIndex
             nextIndex += 1
-            let image = try makeCGImage(from: sampleBuffer)
-            return VideoFrame(idx: idx, timestamp: timestamp, image: image)
+            return try makeFrame(idx: idx, timestamp: timestamp, from: sampleBuffer)
         }
 
         finishReader()
@@ -203,7 +201,10 @@ private actor AVAssetFrameIterator {
                 kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
             ]
         )
-        output.alwaysCopiesSampleData = false
+        // Copy sample data out of the decode pool: frames are kept as lazy
+        // CIImages and rendered later (in Vision), so the backing buffer must
+        // outlive the pooled sample buffer without stalling the reader.
+        output.alwaysCopiesSampleData = true
         guard reader.canAdd(output) else {
             throw AVAssetVideoSourceError.cannotAddReaderOutput(sourceURL)
         }
@@ -222,33 +223,36 @@ private actor AVAssetFrameIterator {
         self.reader = reader
         self.output = output
         self.preferredTransform = try await track.load(.preferredTransform)
-        self.context = CIContext()
         self.baseIndex = Int((rangeStart * targetFPS).rounded(.toNearestOrAwayFromZero))
         self.frameCount = max(1, Int(ceil((rangeEnd - rangeStart) * targetFPS)))
     }
 
-    private func makeCGImage(from sampleBuffer: CMSampleBuffer) throws -> CGImage {
+    private func makeFrame(
+        idx: Int,
+        timestamp: Double,
+        from sampleBuffer: CMSampleBuffer
+    ) throws -> VideoFrame {
         guard let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
             throw AVAssetVideoSourceError.missingImageBuffer
         }
-        guard let context else {
-            throw AVAssetVideoSourceError.imageConversionFailed
-        }
 
-        return try autoreleasepool {
-            let input = CIImage(cvPixelBuffer: imageBuffer)
-            let transformed = input.transformed(by: preferredTransform)
-            let extent = transformed.extent.integral
-            let normalized = transformed.transformed(
-                by: CGAffineTransform(translationX: -extent.origin.x, y: -extent.origin.y)
-            )
-            let renderExtent = normalized.extent.integral
-
-            guard let image = context.createCGImage(normalized, from: renderExtent) else {
-                throw AVAssetVideoSourceError.imageConversionFailed
-            }
-            return image
-        }
+        // Build a lazy, display-oriented CIImage normalized to the origin. No
+        // CGImage is rendered here; Vision (or the preprocessor chain) renders
+        // it once, downstream, at the size it actually needs.
+        let input = CIImage(cvPixelBuffer: imageBuffer)
+        let transformed = input.transformed(by: preferredTransform)
+        let extent = transformed.extent.integral
+        let normalized = transformed.transformed(
+            by: CGAffineTransform(translationX: -extent.origin.x, y: -extent.origin.y)
+        )
+        let pixelExtent = normalized.extent.integral
+        return VideoFrame(
+            idx: idx,
+            timestamp: timestamp,
+            ciImage: normalized,
+            pixelWidth: Int(pixelExtent.width),
+            pixelHeight: Int(pixelExtent.height)
+        )
     }
 
     private func finishReader() {
@@ -257,6 +261,5 @@ private actor AVAssetFrameIterator {
             reader?.cancelReading()
         }
         reader = nil
-        context = nil
     }
 }

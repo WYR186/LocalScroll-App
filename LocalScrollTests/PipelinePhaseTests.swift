@@ -243,14 +243,25 @@ private final class MockVideoSource: VideoSource {
 
 private final class MockOCRBackend: OCRBackend {
     private let linesByFrame: [Int: [Line]]
-    private(set) var detectedFrameIndices: [Int] = []
+    private let lock = NSLock()
+    private var _detectedFrameIndices: [Int] = []
+
+    /// Thread-safe: the concurrent `runFixed` path calls `detect` from several
+    /// task-group children at once, so the backing array needs synchronization.
+    var detectedFrameIndices: [Int] {
+        lock.lock()
+        defer { lock.unlock() }
+        return _detectedFrameIndices
+    }
 
     init(linesByFrame: [Int: [Line]]) {
         self.linesByFrame = linesByFrame
     }
 
     func detect(in frame: VideoFrame) async throws -> [Line] {
-        detectedFrameIndices.append(frame.idx)
+        lock.lock()
+        _detectedFrameIndices.append(frame.idx)
+        lock.unlock()
         return linesByFrame[frame.idx] ?? []
     }
 }

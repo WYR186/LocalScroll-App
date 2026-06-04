@@ -1,4 +1,5 @@
 import CoreGraphics
+import CoreImage
 import Foundation
 import ImageIO
 import LocalScrollCore
@@ -52,7 +53,7 @@ public final class VisionOCRBackend: OCRBackend {
             }
 
             let handler = VNImageRequestHandler(
-                cgImage: frame.image,
+                ciImage: frame.ciImage,
                 orientation: .up,
                 options: [:]
             )

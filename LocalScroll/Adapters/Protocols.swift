@@ -1,8 +1,16 @@
 import CoreGraphics
+import CoreImage
 import Foundation
 import LocalScrollCore
 
-/// A decoded video frame backed by an in-memory image.
+/// A decoded video frame.
+///
+/// The frame can be backed either by a rendered `CGImage` (tests, still images)
+/// or by a not-yet-rendered `CIImage` (the decoder and preprocessor produce
+/// these). Keeping the CI-backed payload lazy lets the whole decode →
+/// preprocess → OCR chain defer to a *single* GPU render inside Vision instead
+/// of rendering a full-resolution `CGImage` at decode time and again after
+/// preprocessing.
 ///
 /// This intentionally lives in the app adapter layer instead of
 /// `LocalScrollCore.Frame`, so the pure algorithm target stays free of
@@ -10,16 +18,76 @@ import LocalScrollCore
 public struct VideoFrame {
     public let idx: Int
     public let timestamp: Double
-    public let image: CGImage
+    public let width: Int
+    public let height: Int
+
+    private enum Storage {
+        case cgImage(CGImage)
+        case ciImage(CIImage)
+    }
+    private let storage: Storage
 
     public init(idx: Int, timestamp: Double, image: CGImage) {
         self.idx = idx
         self.timestamp = timestamp
-        self.image = image
+        self.width = image.width
+        self.height = image.height
+        self.storage = .cgImage(image)
     }
 
-    public var width: Int { image.width }
-    public var height: Int { image.height }
+    /// Build a frame from a GPU-resident `CIImage` *without* rendering it yet.
+    ///
+    /// `pixelWidth`/`pixelHeight` are the display-oriented integer pixel sizes,
+    /// and the image's extent is expected to start at the origin so Vision's
+    /// normalized bounding boxes map back to pixels correctly.
+    public init(idx: Int, timestamp: Double, ciImage: CIImage, pixelWidth: Int, pixelHeight: Int) {
+        self.idx = idx
+        self.timestamp = timestamp
+        self.width = max(1, pixelWidth)
+        self.height = max(1, pixelHeight)
+        self.storage = .ciImage(ciImage)
+    }
+
+    /// A `CIImage` view of the frame. Free when the frame is already CI-backed
+    /// (decoder / preprocessor output); wraps the `CGImage` otherwise.
+    public var ciImage: CIImage {
+        switch storage {
+        case .ciImage(let image): return image
+        case .cgImage(let image): return CIImage(cgImage: image)
+        }
+    }
+
+    /// A `CGImage` view. Returns the stored image directly when CG-backed;
+    /// renders once through the shared context when CI-backed (rarely needed now
+    /// that OCR and optical flow consume `ciImage` directly).
+    public var image: CGImage {
+        switch storage {
+        case .cgImage(let image):
+            return image
+        case .ciImage(let image):
+            let extent = image.extent.integral
+            guard !extent.isInfinite, !extent.isEmpty else { return VideoFrame.fallbackPixel }
+            return SharedRenderContext.ci.createCGImage(image, from: extent) ?? VideoFrame.fallbackPixel
+        }
+    }
+
+    private static let fallbackPixel: CGImage = {
+        let bytes: [UInt8] = [0, 0, 0, 255]
+        let provider = CGDataProvider(data: Data(bytes) as CFData)!
+        return CGImage(
+            width: 1,
+            height: 1,
+            bitsPerComponent: 8,
+            bitsPerPixel: 32,
+            bytesPerRow: 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+            provider: provider,
+            decode: nil,
+            shouldInterpolate: false,
+            intent: .defaultIntent
+        )!
+    }()
 }
 
 public protocol VideoSource {
