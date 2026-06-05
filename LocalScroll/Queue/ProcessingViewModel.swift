@@ -37,6 +37,12 @@ final class ProcessingViewModel: ObservableObject {
         UserDefaults.standard.bool(forKey: SettingsKeys.cacheOriginalVideos)
     }
 
+    private var summaryGenerationMode: SummaryGenerationMode {
+        SummaryGenerationMode(
+            rawValue: UserDefaults.standard.string(forKey: SettingsKeys.summaryGenerationMode) ?? ""
+        ) ?? .manual
+    }
+
     init() {
         notificationObservers.append(
             NotificationCenter.default.addObserver(
@@ -46,6 +52,7 @@ final class ProcessingViewModel: ObservableObject {
             ) { [weak self] _ in
                 Task { @MainActor in
                     self?.restoreCheckpointedItems()
+                    self?.resumeBackgroundPausedItems()
                     self?.startIfNeeded()
                 }
             }
@@ -82,28 +89,88 @@ final class ProcessingViewModel: ObservableObject {
 
     // MARK: - Enqueue
 
-    func enqueue(items: [PhotosPickerItem]) {
-        guard !items.isEmpty else { return }
+    @discardableResult
+    func enqueue(items: [PhotosPickerItem]) async -> [String] {
+        guard !items.isEmpty else { return [] }
+        var failures: [String] = []
+
         for item in items {
-            let name = item.itemIdentifier ?? "Video \(queue.count + 1)"
-            queue.append(
-                QueueItem(
-                    source: .picker(item),
-                    displayName: name,
-                    qualityPreset: qualityPreset,
-                    captionMode: captionMode,
-                    cleanupEnabled: cleanupEnabled
+            do {
+                guard let movie = try await item.loadTransferable(type: SelectedMovie.self) else {
+                    throw LocalScrollUIError.videoImportFailed
+                }
+                defer {
+                    try? FileManager.default.removeItem(at: movie.url)
+                }
+
+                let originalName = movie.originalFileName
+                let processingFileName = try ProcessingVideoStore.store(videoURL: movie.url)
+                queue.append(
+                    QueueItem(
+                        source: .importedFile(
+                            processingFileName: processingFileName,
+                            originalFileName: originalName
+                        ),
+                        displayName: originalName,
+                        originalFileName: originalName,
+                        qualityPreset: qualityPreset,
+                        captionMode: captionMode,
+                        cleanupEnabled: cleanupEnabled
+                    )
                 )
-            )
+            } catch {
+                failures.append(Self.failureStatusText(for: error))
+            }
         }
+
         startIfNeeded()
+        return failures
     }
 
-    func enqueueCachedVideo(url: URL, fileName: String, displayName: String) {
+    @discardableResult
+    func enqueue(fileURLs: [URL]) -> [String] {
+        guard !fileURLs.isEmpty else { return [] }
+        var failures: [String] = []
+
+        for url in fileURLs {
+            let originalName = SupportedVideoTypes.displayName(for: url, fallback: "Selected video")
+            let didStartAccessing = url.startAccessingSecurityScopedResource()
+            defer {
+                if didStartAccessing {
+                    url.stopAccessingSecurityScopedResource()
+                }
+            }
+
+            do {
+                let processingFileName = try ProcessingVideoStore.store(videoURL: url)
+                queue.append(
+                    QueueItem(
+                        source: .importedFile(
+                            processingFileName: processingFileName,
+                            originalFileName: originalName
+                        ),
+                        displayName: originalName,
+                        originalFileName: originalName,
+                        qualityPreset: qualityPreset,
+                        captionMode: captionMode,
+                        cleanupEnabled: cleanupEnabled
+                    )
+                )
+            } catch {
+                failures.append("\(originalName): \(error.localizedDescription)")
+            }
+        }
+
+        startIfNeeded()
+        return failures
+    }
+
+    func enqueueCachedVideo(url: URL, fileName: String, displayName: String, originalFileName: String?) {
         queue.append(
             QueueItem(
                 source: .cachedVideo(url: url, fileName: fileName),
                 displayName: displayName,
+                originalFileName: originalFileName,
                 qualityPreset: qualityPreset,
                 captionMode: captionMode,
                 cleanupEnabled: cleanupEnabled
@@ -135,6 +202,10 @@ final class ProcessingViewModel: ObservableObject {
 
     func clearQueue() {
         cancel()
+        for item in queue {
+            deleteQueuedImport(for: item)
+            deleteCheckpoint(for: item)
+        }
         queue.removeAll()
     }
 
@@ -189,6 +260,7 @@ final class ProcessingViewModel: ObservableObject {
             isRunning = false
         }
         deleteCheckpoint(for: item)
+        deleteQueuedImport(for: item)
         queue.removeAll { $0.id == item.id }
         startIfNeeded()   // no-op if nothing is pending
     }
@@ -205,6 +277,7 @@ final class ProcessingViewModel: ObservableObject {
         }
         for item in targets {
             deleteCheckpoint(for: item)
+            deleteQueuedImport(for: item)
         }
         queue.remove(atOffsets: offsets)
         startIfNeeded()
@@ -259,12 +332,15 @@ final class ProcessingViewModel: ObservableObject {
                 guard let movie = try await pickerItem.loadTransferable(type: SelectedMovie.self) else {
                     throw LocalScrollUIError.videoImportFailed
                 }
+                item.displayName = movie.originalFileName
+                item.originalFileName = movie.originalFileName
                 let processingFileName = try ProcessingVideoStore.store(videoURL: movie.url)
                 guard let storedURL = ProcessingVideoStore.url(for: processingFileName) else {
                     throw LocalScrollUIError.videoImportFailed
                 }
                 let newCheckpoint = ProcessingCheckpoint(
                     displayName: item.displayName,
+                    originalFileName: item.originalFileName,
                     processingVideoFileName: processingFileName,
                     preCachedVideoFileName: nil,
                     qualityPreset: item.qualityPreset,
@@ -278,6 +354,26 @@ final class ProcessingViewModel: ObservableObject {
                 tempURLToDelete = movie.url
                 preCachedFileName = nil
                 resumeState = nil
+            case .importedFile(let processingFileName, let originalFileName):
+                guard let storedURL = ProcessingVideoStore.url(for: processingFileName) else {
+                    throw LocalScrollUIError.videoImportFailed
+                }
+                item.originalFileName = originalFileName
+                let newCheckpoint = ProcessingCheckpoint(
+                    displayName: item.displayName,
+                    originalFileName: originalFileName,
+                    processingVideoFileName: processingFileName,
+                    preCachedVideoFileName: nil,
+                    qualityPreset: item.qualityPreset,
+                    captionMode: item.captionMode,
+                    cleanupEnabled: item.cleanupEnabled
+                )
+                modelContext?.insert(newCheckpoint)
+                try? modelContext?.save()
+                checkpoint = newCheckpoint
+                videoURL = storedURL
+                preCachedFileName = nil
+                resumeState = nil
             case .cachedVideo(let url, let fileName):
                 let processingFileName = try ProcessingVideoStore.store(videoURL: url)
                 guard let storedURL = ProcessingVideoStore.url(for: processingFileName) else {
@@ -285,6 +381,7 @@ final class ProcessingViewModel: ObservableObject {
                 }
                 let newCheckpoint = ProcessingCheckpoint(
                     displayName: item.displayName,
+                    originalFileName: item.originalFileName ?? fileName,
                     processingVideoFileName: processingFileName,
                     preCachedVideoFileName: fileName,
                     qualityPreset: item.qualityPreset,
@@ -304,6 +401,7 @@ final class ProcessingViewModel: ObservableObject {
                 checkpoint = savedCheckpoint
                 videoURL = storedURL
                 preCachedFileName = savedCheckpoint.preCachedVideoFileName
+                item.originalFileName = savedCheckpoint.originalFileName
                 item.progressFraction = savedCheckpoint.progressFraction
                 let samples = savedCheckpoint.decodedSamples
                 let startSeconds = samples.last.map {
@@ -315,6 +413,13 @@ final class ProcessingViewModel: ObservableObject {
                 )
             }
             processingFileNameToDelete = checkpoint?.processingVideoFileName
+
+            // Re-point the queue item at its checkpoint now that one exists, so a
+            // later pause/resume (manual or from background-task expiration)
+            // continues from saved progress instead of reprocessing from frame 0.
+            if let checkpoint {
+                item.source = .checkpoint(checkpoint)
+            }
 
             backgroundTask = BackgroundTaskController()
             backgroundTask?.begin(name: "LocalScroll video processing") { [weak self, weak item] in
@@ -394,6 +499,7 @@ final class ProcessingViewModel: ObservableObject {
             // 6. Persist.
             let record = HistoryRecord(
                 fileName: item.displayName,
+                originalFileName: item.originalFileName ?? item.displayName,
                 durationSeconds: duration,
                 thumbnailData: thumbnail,
                 rawLines: rawLines,
@@ -408,6 +514,8 @@ final class ProcessingViewModel: ObservableObject {
                 modelContext?.delete(checkpoint)
             }
             try? modelContext?.save()
+
+            await generateSummaryIfNeeded(for: record, item: item)
 
             lastFinishedName = item.displayName
             lastFinishedLines = record.displayLines
@@ -429,8 +537,10 @@ final class ProcessingViewModel: ObservableObject {
                 await liveActivity.end(progress: item.progressFraction, status: item.statusText)
             }
         } catch {
-            item.status = .failed(error.localizedDescription)
-            await liveActivity.end(progress: item.progressFraction, status: item.statusText)
+            let message = Self.failureStatusText(for: error)
+            item.status = .failed(message)
+            item.statusText = message
+            await liveActivity.end(progress: item.progressFraction, status: message)
         }
 
         // Clean up the temp import unless it was cached (caching makes its own copy).
@@ -490,6 +600,44 @@ final class ProcessingViewModel: ObservableObject {
         return chunks.joined(separator: " - ")
     }
 
+    static func failureStatusText(for error: Error) -> String {
+        let message = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        return message.isEmpty ? "Processing failed." : message
+    }
+
+    private func generateSummaryIfNeeded(for record: HistoryRecord, item: QueueItem) async {
+        guard summaryGenerationMode.shouldGenerateAfterProcessing(cleanupEnabled: item.cleanupEnabled) else {
+            return
+        }
+        guard case .available = FoundationModelTranscriptSummarizer.currentAvailability else {
+            return
+        }
+
+        let sourceKind = record.preferredSummarySourceKind
+        let sourceLines = record.summarySourceLines
+        guard !FoundationModelTranscriptSummarizer.normalizedLines(sourceLines).isEmpty else {
+            return
+        }
+
+        do {
+            item.statusText = "Summarizing transcript..."
+            let summarizer = FoundationModelTranscriptSummarizer()
+            let summary = try await summarizer.summarize(
+                lines: sourceLines,
+                sourceKind: sourceKind
+            ) { [weak item] progress in
+                await MainActor.run {
+                    item?.statusText = progress.message
+                }
+            }
+            record.applySummary(summary)
+            try? modelContext?.save()
+        } catch {
+            // Extraction has already been persisted. Summary failure should not
+            // turn a finished transcript into a failed queue item.
+        }
+    }
+
     private func restoreCheckpointedItems() {
         guard let modelContext else { return }
         let descriptor = FetchDescriptor<ProcessingCheckpoint>(
@@ -510,6 +658,7 @@ final class ProcessingViewModel: ObservableObject {
             let item = QueueItem(
                 source: .checkpoint(checkpoint),
                 displayName: checkpoint.displayName,
+                originalFileName: checkpoint.originalFileName,
                 qualityPreset: preset,
                 captionMode: checkpoint.captionMode,
                 cleanupEnabled: checkpoint.cleanupEnabled
@@ -520,11 +669,27 @@ final class ProcessingViewModel: ObservableObject {
         }
     }
 
+    /// When the system grants background processing time, continue any items that
+    /// were paused with saved progress (e.g. paused earlier by background-task
+    /// expiration) by moving them back to `.pending` so the loop picks them up.
+    private func resumeBackgroundPausedItems() {
+        for item in queue where item.status == .paused {
+            guard case .checkpoint = item.source else { continue }
+            item.status = .pending
+            item.statusText = ""
+        }
+    }
+
     private func deleteCheckpoint(for item: QueueItem) {
         guard case .checkpoint(let checkpoint) = item.source else { return }
         ProcessingVideoStore.delete(checkpoint.processingVideoFileName)
         modelContext?.delete(checkpoint)
         try? modelContext?.save()
+    }
+
+    private func deleteQueuedImport(for item: QueueItem) {
+        guard case .importedFile(let processingFileName, _) = item.source else { return }
+        ProcessingVideoStore.delete(processingFileName)
     }
 
     private func pauseCurrentForBackgroundExpiration(item: QueueItem? = nil) {
@@ -548,6 +713,7 @@ enum SettingsKeys {
     static let cacheOriginalVideos = "cacheOriginalVideos"
     static let appearance          = "appearance"
     static let ocrLanguage         = "ocrLanguage"
+    static let summaryGenerationMode = "summaryGenerationMode"
 }
 
 enum LocalScrollUIError: Error, LocalizedError {

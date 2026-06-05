@@ -1,0 +1,108 @@
+Command line invocation:
+    /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild test -project LocalScroll.xcodeproj -scheme LocalScroll -destination "platform=iOS Simulator,name=iPhone 17 Pro Max,OS=26.5" "-only-testing:LocalScrollTests/EndToEndComparisonTests" CODE_SIGNING_ALLOWED=NO -derivedDataPath /tmp/LocalScrollDerived -resultBundlePath docs/acceptance-artifacts/2026-06-05-rerun/xcresults/e2e-fast.xcresult
+
+Build settings from command line:
+    CODE_SIGNING_ALLOWED = NO
+
+2026-06-05 15:53:54.837 xcodebuild[26436:758057]  DVTDeviceOperation: Encountered a build number "" that is incompatible with DVTBuildVersion.
+2026-06-05 15:53:54.840 xcodebuild[26436:758005] [MT] DVTDeviceOperation: Encountered a build number "" that is incompatible with DVTBuildVersion.
+Resolve Package Graph
+
+
+Resolved source packages:
+  LocalScrollCore: /Users/ipanda/Documents/project/localScroll_iOS @ local
+
+2026-06-05 15:53:55.605 xcodebuild[26436:758005] [MT] IDERunDestination: Supported platforms for the buildables in the current scheme is empty.
+Writing result bundle at path:
+	/Users/ipanda/Documents/Code/iosproject/LocalScroll_Xcode/docs/acceptance-artifacts/2026-06-05-rerun/xcresults/e2e-fast.xcresult
+
+ComputePackagePrebuildTargetDependencyGraph
+
+Prepare packages
+
+CreateBuildRequest
+
+SendProjectDescription
+
+CreateBuildOperation
+
+ComputeTargetDependencyGraph
+note: Building targets in dependency order
+note: Target dependency graph (6 targets)
+    Target 'LocalScrollUITests' in project 'LocalScroll'
+        ➜ Explicit dependency on target 'LocalScroll' in project 'LocalScroll'
+    Target 'LocalScrollTests' in project 'LocalScroll'
+        ➜ Explicit dependency on target 'LocalScroll' in project 'LocalScroll'
+    Target 'LocalScroll' in project 'LocalScroll'
+        ➜ Explicit dependency on target 'LocalScrollWidget' in project 'LocalScroll'
+        ➜ Explicit dependency on target 'LocalScrollCore' in project 'LocalScrollCore'
+    Target 'LocalScrollCore' in project 'LocalScrollCore'
+        ➜ Explicit dependency on target 'LocalScrollCore' in project 'LocalScrollCore'
+    Target 'LocalScrollCore' in project 'LocalScrollCore' (no dependencies)
+    Target 'LocalScrollWidget' in project 'LocalScroll' (no dependencies)
+
+GatherProvisioningInputs
+
+CreateBuildDescription
+
+ExecuteExternalTool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc --version
+
+ExecuteExternalTool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang -v -E -dM -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator26.5.sdk -x c -c /dev/null
+
+ExecuteExternalTool /Applications/Xcode.app/Contents/Developer/usr/bin/actool --print-asset-tag-combinations --output-format xml1 /Users/ipanda/Documents/Code/iosproject/LocalScroll_Xcode/LocalScroll/Preview Content/Preview Assets.xcassets /Users/ipanda/Documents/Code/iosproject/LocalScroll_Xcode/LocalScroll/Assets.xcassets
+
+ExecuteExternalTool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld -version_details
+
+ExecuteExternalTool /Applications/Xcode.app/Contents/Developer/usr/bin/actool --version --output-format xml1
+
+Build description signature: 7a0aa540aa047051d2039f8122f07688
+Build description path: /tmp/LocalScrollDerived/Build/Intermediates.noindex/XCBuildData/7a0aa540aa047051d2039f8122f07688.xcbuilddata
+ClangStatCache /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang-stat-cache /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator26.5.sdk /tmp/LocalScrollDerived/SDKStatCaches.noindex/iphonesimulator26.5-23F73-6cfe768891a92b912361537c460fe42b.sdkstatcache
+    cd /Users/ipanda/Documents/Code/iosproject/LocalScroll_Xcode/LocalScroll.xcodeproj
+    /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang-stat-cache /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator26.5.sdk -o /tmp/LocalScrollDerived/SDKStatCaches.noindex/iphonesimulator26.5-23F73-6cfe768891a92b912361537c460fe42b.sdkstatcache
+
+ProcessInfoPlistFile /tmp/LocalScrollDerived/Build/Products/Debug-iphonesimulator/LocalScrollWidget.appex/Info.plist /Users/ipanda/Documents/Code/iosproject/LocalScroll_Xcode/LocalScrollWidget-Info.plist (in target 'LocalScrollWidget' from project 'LocalScroll')
+    cd /Users/ipanda/Documents/Code/iosproject/LocalScroll_Xcode
+    builtin-infoPlistUtility /Users/ipanda/Documents/Code/iosproject/LocalScroll_Xcode/LocalScrollWidget-Info.plist -producttype com.apple.product-type.app-extension -expandbuildsettings -format binary -platform iphonesimulator -o /tmp/LocalScrollDerived/Build/Products/Debug-iphonesimulator/LocalScrollWidget.appex/Info.plist
+
+ProcessInfoPlistFile /tmp/LocalScrollDerived/Build/Products/Debug-iphonesimulator/LocalScroll.app/Info.plist /Users/ipanda/Documents/Code/iosproject/LocalScroll_Xcode/LocalScroll-Info.plist (in target 'LocalScroll' from project 'LocalScroll')
+    cd /Users/ipanda/Documents/Code/iosproject/LocalScroll_Xcode
+    builtin-infoPlistUtility /Users/ipanda/Documents/Code/iosproject/LocalScroll_Xcode/LocalScroll-Info.plist -producttype com.apple.product-type.application -genpkginfo /tmp/LocalScrollDerived/Build/Products/Debug-iphonesimulator/LocalScroll.app/PkgInfo -expandbuildsettings -format binary -platform iphonesimulator -additionalcontentfile /tmp/LocalScrollDerived/Build/Intermediates.noindex/LocalScroll.build/Debug-iphonesimulator/LocalScroll.build/assetcatalog_generated_info.plist -scanforprivacyfile /tmp/LocalScrollDerived/Build/Products/Debug-iphonesimulator/LocalScroll.app/PlugIns/LocalScrollWidget.appex -o /tmp/LocalScrollDerived/Build/Products/Debug-iphonesimulator/LocalScroll.app/Info.plist
+
+CopySwiftLibs /tmp/LocalScrollDerived/Build/Products/Debug-iphonesimulator/LocalScroll.app (in target 'LocalScroll' from project 'LocalScroll')
+    cd /Users/ipanda/Documents/Code/iosproject/LocalScroll_Xcode
+    builtin-swiftStdLibTool --copy --verbose --scan-executable /tmp/LocalScrollDerived/Build/Products/Debug-iphonesimulator/LocalScroll.app/LocalScroll.debug.dylib --scan-folder /tmp/LocalScrollDerived/Build/Products/Debug-iphonesimulator/LocalScroll.app/Frameworks --scan-folder /tmp/LocalScrollDerived/Build/Products/Debug-iphonesimulator/LocalScroll.app/PlugIns --scan-folder /tmp/LocalScrollDerived/Build/Products/Debug-iphonesimulator/LocalScroll.app/SystemExtensions --scan-folder /tmp/LocalScrollDerived/Build/Products/Debug-iphonesimulator/LocalScroll.app/Extensions --platform iphonesimulator --toolchain /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain --destination /tmp/LocalScrollDerived/Build/Products/Debug-iphonesimulator/LocalScroll.app/Frameworks --strip-bitcode --strip-bitcode-tool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/bitcode_strip --emit-dependency-info /tmp/LocalScrollDerived/Build/Intermediates.noindex/LocalScroll.build/Debug-iphonesimulator/LocalScroll.build/SwiftStdLibToolInputDependencies.dep --filter-for-swift-os
+Ignoring --strip-bitcode because --sign was not passed
+
+ProcessInfoPlistFile /tmp/LocalScrollDerived/Build/Products/Debug-iphonesimulator/LocalScroll.app/PlugIns/LocalScrollTests.xctest/Info.plist /tmp/LocalScrollDerived/Build/Intermediates.noindex/LocalScroll.build/Debug-iphonesimulator/LocalScrollTests.build/empty-LocalScrollTests.plist (in target 'LocalScrollTests' from project 'LocalScroll')
+    cd /Users/ipanda/Documents/Code/iosproject/LocalScroll_Xcode
+    builtin-infoPlistUtility /tmp/LocalScrollDerived/Build/Intermediates.noindex/LocalScroll.build/Debug-iphonesimulator/LocalScrollTests.build/empty-LocalScrollTests.plist -producttype com.apple.product-type.bundle.unit-test -expandbuildsettings -format binary -platform iphonesimulator -o /tmp/LocalScrollDerived/Build/Products/Debug-iphonesimulator/LocalScroll.app/PlugIns/LocalScrollTests.xctest/Info.plist
+
+CopySwiftLibs /tmp/LocalScrollDerived/Build/Products/Debug-iphonesimulator/LocalScroll.app/PlugIns/LocalScrollTests.xctest (in target 'LocalScrollTests' from project 'LocalScroll')
+    cd /Users/ipanda/Documents/Code/iosproject/LocalScroll_Xcode
+    builtin-swiftStdLibTool --copy --verbose --scan-executable /tmp/LocalScrollDerived/Build/Products/Debug-iphonesimulator/LocalScroll.app/PlugIns/LocalScrollTests.xctest/LocalScrollTests --scan-folder /tmp/LocalScrollDerived/Build/Products/Debug-iphonesimulator/LocalScroll.app/PlugIns/LocalScrollTests.xctest/Frameworks --scan-folder /tmp/LocalScrollDerived/Build/Products/Debug-iphonesimulator/LocalScroll.app/PlugIns/LocalScrollTests.xctest/PlugIns --scan-folder /tmp/LocalScrollDerived/Build/Products/Debug-iphonesimulator/LocalScroll.app/PlugIns/LocalScrollTests.xctest/SystemExtensions --scan-folder /tmp/LocalScrollDerived/Build/Products/Debug-iphonesimulator/LocalScroll.app/PlugIns/LocalScrollTests.xctest/Extensions --platform iphonesimulator --toolchain /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain --destination /tmp/LocalScrollDerived/Build/Products/Debug-iphonesimulator/LocalScroll.app/PlugIns/LocalScrollTests.xctest/Frameworks --strip-bitcode --scan-executable /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/usr/lib/libXCTestSwiftSupport.dylib --strip-bitcode-tool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/bitcode_strip --emit-dependency-info /tmp/LocalScrollDerived/Build/Intermediates.noindex/LocalScroll.build/Debug-iphonesimulator/LocalScrollTests.build/SwiftStdLibToolInputDependencies.dep --filter-for-swift-os
+Ignoring --strip-bitcode because --sign was not passed
+
+ProcessInfoPlistFile /tmp/LocalScrollDerived/Build/Products/Debug-iphonesimulator/LocalScrollUITests-Runner.app/PlugIns/LocalScrollUITests.xctest/Info.plist /tmp/LocalScrollDerived/Build/Intermediates.noindex/LocalScroll.build/Debug-iphonesimulator/LocalScrollUITests.build/empty-LocalScrollUITests.plist (in target 'LocalScrollUITests' from project 'LocalScroll')
+    cd /Users/ipanda/Documents/Code/iosproject/LocalScroll_Xcode
+    builtin-infoPlistUtility /tmp/LocalScrollDerived/Build/Intermediates.noindex/LocalScroll.build/Debug-iphonesimulator/LocalScrollUITests.build/empty-LocalScrollUITests.plist -producttype com.apple.product-type.bundle.ui-testing -expandbuildsettings -format binary -platform iphonesimulator -additionalcontentfile /tmp/LocalScrollDerived/Build/Intermediates.noindex/LocalScroll.build/Debug-iphonesimulator/LocalScrollUITests.build/ProductTypeInfoPlistAdditions.plist -o /tmp/LocalScrollDerived/Build/Products/Debug-iphonesimulator/LocalScrollUITests-Runner.app/PlugIns/LocalScrollUITests.xctest/Info.plist
+
+CopySwiftLibs /tmp/LocalScrollDerived/Build/Products/Debug-iphonesimulator/LocalScrollUITests-Runner.app/PlugIns/LocalScrollUITests.xctest (in target 'LocalScrollUITests' from project 'LocalScroll')
+    cd /Users/ipanda/Documents/Code/iosproject/LocalScroll_Xcode
+    builtin-swiftStdLibTool --copy --verbose --scan-executable /tmp/LocalScrollDerived/Build/Products/Debug-iphonesimulator/LocalScrollUITests-Runner.app/PlugIns/LocalScrollUITests.xctest/LocalScrollUITests --scan-folder /tmp/LocalScrollDerived/Build/Products/Debug-iphonesimulator/LocalScrollUITests-Runner.app/PlugIns/LocalScrollUITests.xctest/Frameworks --scan-folder /tmp/LocalScrollDerived/Build/Products/Debug-iphonesimulator/LocalScrollUITests-Runner.app/PlugIns/LocalScrollUITests.xctest/PlugIns --scan-folder /tmp/LocalScrollDerived/Build/Products/Debug-iphonesimulator/LocalScrollUITests-Runner.app/PlugIns/LocalScrollUITests.xctest/SystemExtensions --scan-folder /tmp/LocalScrollDerived/Build/Products/Debug-iphonesimulator/LocalScrollUITests-Runner.app/PlugIns/LocalScrollUITests.xctest/Extensions --platform iphonesimulator --toolchain /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain --destination /tmp/LocalScrollDerived/Build/Products/Debug-iphonesimulator/LocalScrollUITests-Runner.app/PlugIns/LocalScrollUITests.xctest/Frameworks --strip-bitcode --scan-executable /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/usr/lib/libXCTestSwiftSupport.dylib --strip-bitcode-tool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/bitcode_strip --emit-dependency-info /tmp/LocalScrollDerived/Build/Intermediates.noindex/LocalScroll.build/Debug-iphonesimulator/LocalScrollUITests.build/SwiftStdLibToolInputDependencies.dep --filter-for-swift-os
+Ignoring --strip-bitcode because --sign was not passed
+
+2026-06-05 15:54:16.782 xcodebuild[26436:758005] [MT] IDETestOperationsObserverDebug: 19.398 elapsed -- Testing started completed.
+2026-06-05 15:54:16.782 xcodebuild[26436:758005] [MT] IDETestOperationsObserverDebug: 0.000 sec, +0.000 sec -- start
+2026-06-05 15:54:16.782 xcodebuild[26436:758005] [MT] IDETestOperationsObserverDebug: 19.398 sec, +19.398 sec -- end
+
+Test session results, code coverage, and logs:
+	/Users/ipanda/Documents/Code/iosproject/LocalScroll_Xcode/docs/acceptance-artifacts/2026-06-05-rerun/xcresults/e2e-fast.xcresult
+
+** TEST SUCCEEDED **
+
+Testing started
+Test suite 'EndToEndComparisonTests' started on 'Clone 1 of iPhone 17 Pro Max - LocalScroll (26702)'
+Test case 'EndToEndComparisonTests/iosPipelineMatchesPythonFastBaselineOnRealVideo()' passed on 'Clone 1 of iPhone 17 Pro Max - LocalScroll (26702)' (0.000 seconds)
+Test suite 'EndToEndComparisonTests' started on 'Clone 1 of iPhone 17 Pro Max - LocalScroll (26702)'
+Test case 'EndToEndComparisonTests/iosPipelineMatchesPythonFastBaselineOnRealVideo()' passed on 'Clone 1 of iPhone 17 Pro Max - LocalScroll (26702)' (0.000 seconds)

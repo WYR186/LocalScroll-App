@@ -38,6 +38,8 @@ struct ContentView: View {
 struct ExtractView: View {
     @EnvironmentObject private var model: ProcessingViewModel
     @State private var selectedItems: [PhotosPickerItem] = []
+    @State private var isFileImporterPresented = false
+    @State private var importErrorMessage: String?
 
     var body: some View {
         NavigationStack {
@@ -70,22 +72,61 @@ struct ExtractView: View {
             }
             .onChange(of: selectedItems) { _, newItems in
                 guard !newItems.isEmpty else { return }
-                model.enqueue(items: newItems)
                 selectedItems = []
+                Task { @MainActor in
+                    let failures = await model.enqueue(items: newItems)
+                    if !failures.isEmpty {
+                        importErrorMessage = failures.joined(separator: "\n")
+                    }
+                }
+            }
+            .fileImporter(
+                isPresented: $isFileImporterPresented,
+                allowedContentTypes: SupportedVideoTypes.importableTypes,
+                allowsMultipleSelection: true
+            ) { result in
+                switch result {
+                case .success(let urls):
+                    let failures = model.enqueue(fileURLs: urls)
+                    if !failures.isEmpty {
+                        importErrorMessage = failures.joined(separator: "\n")
+                    }
+                case .failure(let error):
+                    importErrorMessage = error.localizedDescription
+                }
+            }
+            .alert("Could Not Import Video", isPresented: importErrorPresented) {
+                Button("OK", role: .cancel) {
+                    importErrorMessage = nil
+                }
+            } message: {
+                Text(importErrorMessage ?? "")
             }
         }
     }
 
     private var controlBar: some View {
         VStack(alignment: .leading, spacing: 12) {
-            PhotosPicker(
-                selection: $selectedItems,
-                matching: .videos
-            ) {
-                Label("Choose Videos", systemImage: "video.badge.plus")
-                    .frame(maxWidth: .infinity)
+            HStack(spacing: 10) {
+                PhotosPicker(
+                    selection: $selectedItems,
+                    matching: .videos,
+                    preferredItemEncoding: .current
+                ) {
+                    Label("Photos", systemImage: "photo.on.rectangle")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+
+                Button {
+                    isFileImporterPresented = true
+                } label: {
+                    Label("Files", systemImage: "folder.badge.plus")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
             }
-            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
 
             HStack(spacing: 12) {
                 Picker("Quality", selection: $model.qualityPreset) {
@@ -163,6 +204,16 @@ struct ExtractView: View {
             return true
         }
         return false
+    }
+
+    private var importErrorPresented: Binding<Bool> {
+        Binding {
+            importErrorMessage != nil
+        } set: { isPresented in
+            if !isPresented {
+                importErrorMessage = nil
+            }
+        }
     }
 }
 

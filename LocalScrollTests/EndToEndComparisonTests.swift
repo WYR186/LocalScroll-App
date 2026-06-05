@@ -23,10 +23,48 @@ struct EndToEndComparisonTests {
     // re-run on this identical clip for an apples-to-apples diff. Override with
     // LOCALSCROLL_E2E_VIDEO to point at the full IMG_0559.mov.
     private static let defaultVideoPath = "/tmp/ls_clip_75_90.mp4"
+    private static let repoSampleVideoPath = "/Users/ipanda/Documents/project/LocalScroll/test_video/IMG_0249.MOV"
+    private static let defaultBlankVideoPath = "/tmp/localscroll_blank_10s.mp4"
 
     @Test func iosPipelineMatchesPythonFastBaselineOnRealVideo() async throws {
         let env = ProcessInfo.processInfo.environment
-        let path = env["LOCALSCROLL_E2E_VIDEO"] ?? Self.defaultVideoPath
+        guard let path = env["LOCALSCROLL_E2E_VIDEO"]
+            ?? Self.firstExistingPath([Self.repoSampleVideoPath, Self.defaultVideoPath])
+        else {
+            print("E2E_SKIP: no real sample video found.")
+            return
+        }
+        let expectEmpty = env["LOCALSCROLL_E2E_EXPECT_EMPTY"] == "1"
+        let minimumLineCount = Int(env["LOCALSCROLL_E2E_MIN_LINES"] ?? "") ?? (expectEmpty ? 0 : 1)
+
+        try await Self.runPipeline(
+            path: path,
+            expectEmpty: expectEmpty,
+            minimumLineCount: minimumLineCount
+        )
+    }
+
+    @Test func blankVideoProducesEmptyTranscript() async throws {
+        let env = ProcessInfo.processInfo.environment
+        let path = env["LOCALSCROLL_E2E_BLANK_VIDEO"] ?? Self.defaultBlankVideoPath
+
+        guard FileManager.default.fileExists(atPath: path) else {
+            print("E2E_SKIP: blank video not found at \(path)")
+            return
+        }
+
+        try await Self.runPipeline(path: path, expectEmpty: true, minimumLineCount: 0)
+    }
+
+    private static func firstExistingPath(_ paths: [String]) -> String? {
+        paths.first { FileManager.default.fileExists(atPath: $0) }
+    }
+
+    private static func runPipeline(
+        path: String,
+        expectEmpty: Bool,
+        minimumLineCount: Int
+    ) async throws {
         let url = URL(fileURLWithPath: path)
 
         guard FileManager.default.fileExists(atPath: path) else {
@@ -46,6 +84,8 @@ struct EndToEndComparisonTests {
         }
         print("E2E_VIDEO_PATH=\(path)")
         print("E2E_VIDEO_DURATION=\(duration)")
+        print("E2E_EXPECT_EMPTY=\(expectEmpty)")
+        print("E2E_MIN_LINES=\(minimumLineCount)")
 
         // Mirror `localscroll process --quality fast`:
         //   backend = Apple Vision (auto language, accurate, correction on)
@@ -80,13 +120,18 @@ struct EndToEndComparisonTests {
         print("===IOS_E2E_TRANSCRIPT_END===")
 
         // Best-effort durable copy inside the (writable) app container.
-        let outDir = env["LOCALSCROLL_E2E_OUTDIR"].map { URL(fileURLWithPath: $0) }
+        let outDir = ProcessInfo.processInfo.environment["LOCALSCROLL_E2E_OUTDIR"].map { URL(fileURLWithPath: $0) }
             ?? FileManager.default.temporaryDirectory
-        let outURL = outDir.appendingPathComponent("ios_vision_fast.txt")
+        let outFileName = expectEmpty ? "ios_vision_blank.txt" : "ios_vision_fast.txt"
+        let outURL = outDir.appendingPathComponent(outFileName)
         try? transcript.lines.joined(separator: "\n")
             .write(to: outURL, atomically: true, encoding: .utf8)
         print("IOS_E2E_OUT=\(outURL.path)")
 
-        #expect(!transcript.lines.isEmpty)
+        if expectEmpty {
+            #expect(transcript.lines.isEmpty)
+        } else {
+            #expect(transcript.lines.count >= minimumLineCount)
+        }
     }
 }

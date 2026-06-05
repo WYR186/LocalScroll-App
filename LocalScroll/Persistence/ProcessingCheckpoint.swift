@@ -5,6 +5,7 @@ import SwiftData
 final class ProcessingCheckpoint {
     @Attribute(.unique) var id: UUID
     var displayName: String
+    var originalFileName: String?
     var processingVideoFileName: String
     var preCachedVideoFileName: String?
     var qualityPreset: String
@@ -20,6 +21,7 @@ final class ProcessingCheckpoint {
     init(
         id: UUID = UUID(),
         displayName: String,
+        originalFileName: String? = nil,
         processingVideoFileName: String,
         preCachedVideoFileName: String?,
         qualityPreset: QualityPreset,
@@ -28,6 +30,7 @@ final class ProcessingCheckpoint {
     ) {
         self.id = id
         self.displayName = displayName
+        self.originalFileName = originalFileName
         self.processingVideoFileName = processingVideoFileName
         self.preCachedVideoFileName = preCachedVideoFileName
         self.qualityPreset = qualityPreset.rawValue

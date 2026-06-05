@@ -20,12 +20,18 @@ final class QueueItem: ObservableObject, Identifiable {
     /// (used when re-processing from history).
     enum Source {
         case picker(PhotosPickerItem)
+        case importedFile(processingFileName: String, originalFileName: String)
         case cachedVideo(url: URL, fileName: String)
         case checkpoint(ProcessingCheckpoint)
     }
 
-    let source: Source
+    /// Mutable so the queue can re-point a running item at its on-disk
+    /// `ProcessingCheckpoint` once processing begins. This lets a pause/resume
+    /// (manual or triggered by background-task expiration) continue from the
+    /// saved progress instead of restarting the video from the first frame.
+    var source: Source
     @Published var displayName: String
+    @Published var originalFileName: String?
     @Published var status: Status = .pending
     @Published var progressFraction: Double = 0
     @Published var statusText: String = ""
@@ -37,12 +43,14 @@ final class QueueItem: ObservableObject, Identifiable {
     init(
         source: Source,
         displayName: String,
+        originalFileName: String? = nil,
         qualityPreset: QualityPreset,
         captionMode: Bool,
         cleanupEnabled: Bool
     ) {
         self.source = source
         self.displayName = displayName
+        self.originalFileName = originalFileName
         self.qualityPreset = qualityPreset
         self.captionMode = captionMode
         self.cleanupEnabled = cleanupEnabled

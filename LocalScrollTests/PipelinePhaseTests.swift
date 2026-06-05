@@ -63,6 +63,42 @@ struct PipelinePhaseTests {
         #expect(progressEvents[1].scrollState == .paused)
     }
 
+    @Test func smartPipelineCommitsReverseScrollFrames() async throws {
+        let source = MockVideoSource(frameCount: 4)
+        let ocr = MockOCRBackend(linesByFrame: [
+            0: [Line(text: "Opening visible item", bbox: BBox(x: 0, y: 0, w: 80, h: 12), confidence: 1)],
+            1: [Line(text: "Forward-only new item", bbox: BBox(x: 0, y: 0, w: 80, h: 12), confidence: 1)],
+            2: [Line(text: "Reverse-scroll revealed item", bbox: BBox(x: 0, y: 0, w: 80, h: 12), confidence: 1)],
+            3: [Line(text: "Forward again final item", bbox: BBox(x: 0, y: 0, w: 80, h: 12), confidence: 1)],
+        ])
+        let motion = MockMotionEstimator(dys: [1, -1, 1])
+        let pipeline = Pipeline(
+            video: source,
+            ocr: ocr,
+            motion: motion,
+            config: PipelineConfig(
+                fps: 1.0,
+                schedulerConfig: SchedulerConfig(
+                    pauseThresholdPx: 0.1,
+                    fastThresholdRatio: 100,
+                    discontinuityThresholdRatio: 100,
+                    historySize: 1,
+                    commitReverse: true
+                ),
+                adaptive: true
+            )
+        )
+
+        var progressEvents: [PipelineProgress] = []
+        let transcript = try await pipeline.run(onProgress: { progress in
+            progressEvents.append(progress)
+        })
+
+        #expect(progressEvents.compactMap(\.scrollState).contains(.reverse))
+        #expect(transcript.lines.contains("Reverse-scroll revealed item"))
+        #expect(transcript.lines.contains("Forward again final item"))
+    }
+
     @Test func captionModeCollapsesIncrementalLines() async throws {
         let source = MockVideoSource(frameCount: 3)
         let ocr = MockOCRBackend(linesByFrame: [
@@ -82,6 +118,26 @@ struct PipelinePhaseTests {
         let transcript = try await pipeline.run()
 
         #expect(transcript.lines == ["Hello world today"])
+    }
+
+    @Test func blankVideoPipelineCompletesWithZeroLines() async throws {
+        let source = MockVideoSource(frameCount: 3)
+        let ocr = MockOCRBackend(linesByFrame: [
+            0: [],
+            1: [],
+            2: [],
+        ])
+        let pipeline = Pipeline(video: source, ocr: ocr, config: PipelineConfig(fps: 1.0))
+
+        var progressEvents: [PipelineProgress] = []
+        let transcript = try await pipeline.run(onProgress: { progress in
+            progressEvents.append(progress)
+        })
+
+        #expect(transcript.lines.isEmpty)
+        #expect(progressEvents.last?.processedFrames == 3)
+        #expect(progressEvents.last?.recognizedLines == 0)
+        #expect(progressEvents.last?.fractionCompleted == 1)
     }
 
     @Test func fourMinuteEquivalentPipelineCompletesWithoutFrameAccumulation() async throws {

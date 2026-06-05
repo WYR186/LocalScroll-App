@@ -72,6 +72,7 @@ struct SettingsView: View {
     @AppStorage(SettingsKeys.appearance)          private var appearance         = AppearancePreference.system
     @AppStorage(SettingsKeys.cacheOriginalVideos) private var cacheOriginalVideos = false
     @AppStorage(SettingsKeys.ocrLanguage)         private var ocrLanguage        = OCRLanguagePreference.automatic
+    @AppStorage(SettingsKeys.summaryGenerationMode) private var summaryGenerationMode = SummaryGenerationMode.manual
 
     var body: some View {
         NavigationStack {
@@ -104,6 +105,25 @@ struct SettingsView: View {
                     Text("Recognition")
                 } footer: {
                     Text("Choosing one language is faster and usually more reliable when your videos are not mixed-language.")
+                }
+
+                // ── Summary ───────────────────────────────────────────────
+                Section {
+                    Picker(selection: $summaryGenerationMode) {
+                        ForEach(SummaryGenerationMode.allCases) { mode in
+                            Text(mode.title).tag(mode)
+                        }
+                    } label: {
+                        Label("Generate Summary", systemImage: "list.bullet.rectangle")
+                    }
+
+                    Text(summaryGenerationMode.detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } header: {
+                    Text("Summary")
+                } footer: {
+                    Text("Summaries use Apple Foundation Models on-device when available. Long transcripts are summarized in ordered parts to preserve detail.")
                 }
 
                 // ── Storage ───────────────────────────────────────────────
