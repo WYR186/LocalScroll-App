@@ -278,3 +278,53 @@ private func clampFraction(_ x: Double) -> Double { min(max(x, 0), 1) }
 private func percentText(_ progress: Double) -> String {
     "\(Int((clampFraction(progress) * 100).rounded()))%"
 }
+
+// MARK: - Previews
+//
+// Live Activities do not render in the simulator, so these previews let the
+// redesign be checked in the Xcode canvas across every phase without a device.
+
+private typealias PreviewState = ProcessingActivityAttributes.ContentState
+
+private let previewAttributes = ProcessingActivityAttributes(videoName: "Lecture 4 — Fallacies.mov")
+
+private let previewExtracting = PreviewState(progress: 0.62, phase: .extracting, lineCount: 38, detail: nil)
+private let previewSummarizing = PreviewState(progress: 1, phase: .summarizing, lineCount: 38, detail: nil)
+private let previewDone = PreviewState(progress: 1, phase: .done, lineCount: 38, detail: nil)
+private let previewPaused = PreviewState(progress: 0.43, phase: .paused, lineCount: 0, detail: "Progress saved")
+private let previewFailed = PreviewState(progress: 0.21, phase: .failed, lineCount: 0, detail: "Not enough disk space")
+
+#Preview("Lock Screen", as: .content, using: previewAttributes) {
+    ProcessingLiveActivityWidget()
+} contentStates: {
+    previewExtracting
+    previewSummarizing
+    previewDone
+    previewPaused
+    previewFailed
+}
+
+#Preview("Dynamic Island (expanded)", as: .dynamicIsland(.expanded), using: previewAttributes) {
+    ProcessingLiveActivityWidget()
+} contentStates: {
+    previewExtracting
+    previewDone
+    previewPaused
+    previewFailed
+}
+
+#Preview("Dynamic Island (compact)", as: .dynamicIsland(.compact), using: previewAttributes) {
+    ProcessingLiveActivityWidget()
+} contentStates: {
+    previewExtracting
+    previewDone
+    previewFailed
+}
+
+#Preview("Dynamic Island (minimal)", as: .dynamicIsland(.minimal), using: previewAttributes) {
+    ProcessingLiveActivityWidget()
+} contentStates: {
+    previewExtracting
+    previewDone
+    previewPaused
+}
