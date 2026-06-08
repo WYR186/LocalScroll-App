@@ -15,7 +15,10 @@ final class LocalScrollUITests: XCTestCase {
         // In UI tests it is usually best to stop immediately when a failure occurs.
         continueAfterFailure = false
 
-        // In UI tests it’s important to set the initial state - such as interface orientation - required for your tests before they run. The setUp method is a good place to do this.
+        // LocalScroll is a portrait app. Pin the simulator to portrait so a CI
+        // host that happens to be landscape can't push Form/List rows below the
+        // fold (off-screen SwiftUI cells drop out of the accessibility tree).
+        XCUIDevice.shared.orientation = .portrait
     }
 
     override func tearDownWithError() throws {
@@ -49,6 +52,22 @@ final class LocalScrollUITests: XCTestCase {
         att.name = name
         att.lifetime = .keepAlways
         add(att)
+    }
+
+    /// Swipe up within the app until `element` enters the accessibility tree.
+    /// SwiftUI omits off-screen Form/List cells from the tree, so a bare
+    /// `.exists` check on a lower row can spuriously fail when the row is below
+    /// the fold (e.g. in landscape). Returns whether the element became present.
+    @discardableResult
+    private func scrollToElement(_ element: XCUIElement,
+                                 in app: XCUIApplication,
+                                 maxSwipes: Int = 6) -> Bool {
+        var swipes = 0
+        while !element.exists && swipes < maxSwipes {
+            app.swipeUp()
+            swipes += 1
+        }
+        return element.exists
     }
 
     /// S-01 (launch / three tabs) + S-02 control presence (Photos / Files / presets / Caption).
@@ -91,8 +110,14 @@ final class LocalScrollUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Appearance"].exists, "Appearance row missing")          // F-39/F-40
         XCTAssertTrue(app.staticTexts["OCR Language"].exists, "OCR Language row missing")       // F-41
         XCTAssertTrue(app.staticTexts["Generate Summary"].exists, "Summary row missing")        // F-44
-        XCTAssertTrue(app.switches["Cache Original Videos"].exists, "Cache toggle missing")     // F-42
-        XCTAssertTrue(app.staticTexts["Manage Cached Videos"].exists, "Cache manager missing")  // F-43
+        // The Storage section sits lower in the Form and can be below the fold
+        // (especially in landscape / compact height), where SwiftUI keeps the
+        // off-screen cells out of the accessibility tree. Scroll them into view
+        // before asserting so this is a content check, not a layout check.
+        XCTAssertTrue(scrollToElement(app.switches["Cache Original Videos"], in: app),
+                      "Cache toggle missing")                                                    // F-42
+        XCTAssertTrue(scrollToElement(app.staticTexts["Manage Cached Videos"], in: app),
+                      "Cache manager missing")                                                    // F-43
         attach(app, "F39_settings_tab")
     }
 
