@@ -429,11 +429,12 @@ final class ProcessingViewModel: ObservableObject {
             liveActivity.start(
                 videoName: item.displayName,
                 progress: item.progressFraction,
-                status: item.statusText
+                phase: .importing
             )
 
             // 2. Build + run the pipeline.
             item.statusText = "Preparing frames..."
+            await liveActivity.update(progress: item.progressFraction, phase: .preparing)
             let pipeline = Self.buildPipeline(
                 videoURL: videoURL,
                 preset: item.qualityPreset,
@@ -458,10 +459,13 @@ final class ProcessingViewModel: ObservableObject {
                     guard let item else { return }
                     item.progressFraction = progress.fractionCompleted
                     item.statusText = Self.progressText(progress)
+                    let fraction = item.progressFraction
+                    let lines = progress.recognizedLines
                     Task {
                         await self.liveActivity.update(
-                            progress: item.progressFraction,
-                            status: item.statusText
+                            progress: fraction,
+                            phase: .extracting,
+                            lineCount: lines
                         )
                     }
                 }
@@ -474,6 +478,7 @@ final class ProcessingViewModel: ObservableObject {
             var preferredCleaned = false
             if item.cleanupEnabled {
                 item.statusText = "Cleaning transcript..."
+                await liveActivity.update(progress: item.progressFraction, phase: .cleaning, lineCount: rawLines.count)
                 let cleaner = FoundationModelTranscriptCleaner()
                 let cleanup = try await cleaner.cleanup(result)
                 rawLines = cleanup.rawTranscript.lines
@@ -483,6 +488,7 @@ final class ProcessingViewModel: ObservableObject {
 
             // 4. Thumbnail + duration.
             item.statusText = "Saving to history..."
+            await liveActivity.update(progress: item.progressFraction, phase: .saving, lineCount: rawLines.count)
             let thumbnail = try await VideoThumbnail.generate(url: videoURL)
             let duration = (try? await AVAssetVideoSource(url: videoURL).durationSeconds()) ?? 0
 
@@ -522,7 +528,7 @@ final class ProcessingViewModel: ObservableObject {
             item.progressFraction = 1
             item.statusText = record.lineCount == 1 ? "1 line" : "\(record.lineCount) lines"
             item.status = .done
-            await liveActivity.end(progress: 1, status: item.statusText)
+            await liveActivity.end(progress: 1, phase: .done, lineCount: record.lineCount)
             if let processingFileNameToDelete {
                 ProcessingVideoStore.delete(processingFileNameToDelete)
             }
@@ -530,17 +536,17 @@ final class ProcessingViewModel: ObservableObject {
             if backgroundExpirationRequested {
                 item.status = .paused
                 item.statusText = "Paused — progress saved"
-                await liveActivity.end(progress: item.progressFraction, status: item.statusText)
+                await liveActivity.end(progress: item.progressFraction, phase: .paused, detail: "Progress saved")
             } else if item.status == .processing {
                 item.status = .failed("Canceled")
                 item.statusText = "Canceled"
-                await liveActivity.end(progress: item.progressFraction, status: item.statusText)
+                await liveActivity.end(progress: item.progressFraction, phase: .failed, detail: "Canceled")
             }
         } catch {
             let message = Self.failureStatusText(for: error)
             item.status = .failed(message)
             item.statusText = message
-            await liveActivity.end(progress: item.progressFraction, status: message)
+            await liveActivity.end(progress: item.progressFraction, phase: .failed, detail: message)
         }
 
         // Clean up the temp import unless it was cached (caching makes its own copy).
