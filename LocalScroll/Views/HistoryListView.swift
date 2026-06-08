@@ -7,6 +7,20 @@ struct HistoryListView: View {
 
     @State private var recordToRename: HistoryRecord?
     @State private var renameText = ""
+    @State private var searchText = ""
+    @State private var presetFilter: QualityPreset?
+
+    /// Records after applying the search query and the preset filter.
+    private var filteredRecords: [HistoryRecord] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return records.filter { record in
+            let matchesPreset = presetFilter == nil || record.qualityPreset == presetFilter?.rawValue
+            let matchesQuery = query.isEmpty
+                || record.fileName.localizedCaseInsensitiveContains(query)
+                || record.originalVideoFileName.localizedCaseInsensitiveContains(query)
+            return matchesPreset && matchesQuery
+        }
+    }
 
     var body: some View {
         NavigationStack {
@@ -17,9 +31,11 @@ struct HistoryListView: View {
                         systemImage: "clock.arrow.circlepath",
                         description: Text("Processed videos and their recognized subtitles appear here.")
                     )
+                } else if filteredRecords.isEmpty {
+                    noMatchesView
                 } else {
                     List {
-                        ForEach(records) { record in
+                        ForEach(filteredRecords) { record in
                             NavigationLink {
                                 HistoryDetailView(record: record)
                             } label: {
@@ -59,9 +75,17 @@ struct HistoryListView: View {
                 }
             }
             .navigationTitle("History")
+            .searchable(text: $searchText, prompt: "Search history")
             .toolbar {
-                if !records.isEmpty {
-                    EditButton()
+                ToolbarItem(placement: .topBarLeading) {
+                    if !records.isEmpty {
+                        EditButton()
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    if !records.isEmpty {
+                        filterMenu
+                    }
                 }
             }
             .alert("Rename Video", isPresented: renamePresented) {
@@ -79,8 +103,42 @@ struct HistoryListView: View {
         }
     }
 
+    /// Pull-down menu that filters the list by the quality preset used.
+    private var filterMenu: some View {
+        Menu {
+            Picker("Quality Preset", selection: $presetFilter) {
+                Text("All Presets").tag(QualityPreset?.none)
+                ForEach(QualityPreset.allCases) { preset in
+                    Text(preset.title).tag(QualityPreset?.some(preset))
+                }
+            }
+        } label: {
+            Label(
+                "Filter",
+                systemImage: presetFilter == nil
+                    ? "line.3.horizontal.decrease.circle"
+                    : "line.3.horizontal.decrease.circle.fill"
+            )
+        }
+    }
+
+    /// Shown when there are records but the search/filter excludes them all.
+    @ViewBuilder
+    private var noMatchesView: some View {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if query.isEmpty, let presetFilter {
+            ContentUnavailableView(
+                "No \(presetFilter.title) Extractions",
+                systemImage: "line.3.horizontal.decrease.circle",
+                description: Text("No history matches the selected quality preset.")
+            )
+        } else {
+            ContentUnavailableView.search(text: query)
+        }
+    }
+
     private func delete(at offsets: IndexSet) {
-        delete(records: offsets.map { records[$0] })
+        delete(records: offsets.map { filteredRecords[$0] })
     }
 
     private func delete(records recordsToDelete: [HistoryRecord]) {
