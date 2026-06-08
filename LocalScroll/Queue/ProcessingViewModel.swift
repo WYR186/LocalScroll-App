@@ -521,6 +521,9 @@ final class ProcessingViewModel: ObservableObject {
             }
             try? modelContext?.save()
 
+            if willGenerateSummary(for: item) {
+                await liveActivity.update(progress: item.progressFraction, phase: .summarizing, lineCount: record.lineCount)
+            }
             await generateSummaryIfNeeded(for: record, item: item)
 
             lastFinishedName = item.displayName
@@ -611,13 +614,22 @@ final class ProcessingViewModel: ObservableObject {
         return message.isEmpty ? "Processing failed." : message
     }
 
-    private func generateSummaryIfNeeded(for record: HistoryRecord, item: QueueItem) async {
+    /// Whether an on-device summary will actually be generated for this item —
+    /// the mode opts in *and* a Foundation Model is available. Shared by the
+    /// summary step and the `.summarizing` Live Activity update so the two can't
+    /// drift apart.
+    private func willGenerateSummary(for item: QueueItem) -> Bool {
         guard summaryGenerationMode.shouldGenerateAfterProcessing(cleanupEnabled: item.cleanupEnabled) else {
-            return
+            return false
         }
-        guard case .available = FoundationModelTranscriptSummarizer.currentAvailability else {
-            return
+        if case .available = FoundationModelTranscriptSummarizer.currentAvailability {
+            return true
         }
+        return false
+    }
+
+    private func generateSummaryIfNeeded(for record: HistoryRecord, item: QueueItem) async {
+        guard willGenerateSummary(for: item) else { return }
 
         let sourceKind = record.preferredSummarySourceKind
         let sourceLines = record.summarySourceLines
