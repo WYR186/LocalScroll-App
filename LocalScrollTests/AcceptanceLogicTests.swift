@@ -73,4 +73,59 @@ struct AcceptanceLogicTests {
         #expect(first.displayLines == ["First run"])
         #expect(second.displayLines == ["Second run"])
     }
+
+    // MARK: - History search + preset filter
+
+    private func makeRecord(
+        fileName: String,
+        originalFileName: String,
+        preset: QualityPreset
+    ) -> HistoryRecord {
+        HistoryRecord(
+            fileName: fileName,
+            originalFileName: originalFileName,
+            durationSeconds: 10,
+            thumbnailData: Data([0]),
+            rawLines: ["line"],
+            cleanedLines: nil,
+            preferredCleaned: false,
+            qualityPreset: preset.rawValue,
+            captionMode: false
+        )
+    }
+
+    @Test func historySearchMatchesEditableTitleAndOriginalNameCaseInsensitively() {
+        let renamed = makeRecord(fileName: "Lecture Notes", originalFileName: "IMG_0249.MOV", preset: .fast)
+        let other = makeRecord(fileName: "Recipe", originalFileName: "IMG_8888.MOV", preset: .smart)
+        let records = [renamed, other]
+
+        // Matches the editable title (case-insensitive).
+        #expect(HistoryFilter.apply(to: records, query: "lecture", preset: nil).map(\.id) == [renamed.id])
+        // Matches the original file name even after the title was renamed.
+        #expect(HistoryFilter.apply(to: records, query: "img_0249", preset: nil).map(\.id) == [renamed.id])
+        // No match → empty.
+        #expect(HistoryFilter.apply(to: records, query: "zzz", preset: nil).isEmpty)
+    }
+
+    @Test func historyBlankQueryReturnsEverythingAndTrimsWhitespace() {
+        let records = [
+            makeRecord(fileName: "A", originalFileName: "a.mov", preset: .fast),
+            makeRecord(fileName: "B", originalFileName: "b.mov", preset: .smart),
+        ]
+        #expect(HistoryFilter.apply(to: records, query: "", preset: nil).count == 2)
+        #expect(HistoryFilter.apply(to: records, query: "   ", preset: nil).count == 2)
+    }
+
+    @Test func historyPresetFilterExcludesOtherPresets() {
+        let fast = makeRecord(fileName: "Fast clip", originalFileName: "f.mov", preset: .fast)
+        let smart = makeRecord(fileName: "Smart clip", originalFileName: "s.mov", preset: .smart)
+        let precise = makeRecord(fileName: "Precise clip", originalFileName: "p.mov", preset: .precise)
+        let records = [fast, smart, precise]
+
+        #expect(HistoryFilter.apply(to: records, query: "", preset: .smart).map(\.id) == [smart.id])
+        // Search + preset combine (AND): query matches all "clip", preset narrows to precise.
+        #expect(HistoryFilter.apply(to: records, query: "clip", preset: .precise).map(\.id) == [precise.id])
+        // Preset matches but query does not → empty.
+        #expect(HistoryFilter.apply(to: records, query: "fast", preset: .smart).isEmpty)
+    }
 }

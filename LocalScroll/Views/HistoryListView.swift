@@ -1,6 +1,21 @@
 import SwiftData
 import SwiftUI
 
+/// Pure search + quality-preset filter for History, extracted so the matching
+/// rules can be unit-tested independently of the view.
+enum HistoryFilter {
+    static func apply(to records: [HistoryRecord], query: String, preset: QualityPreset?) -> [HistoryRecord] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        return records.filter { record in
+            let matchesPreset = preset == nil || record.qualityPreset == preset?.rawValue
+            let matchesQuery = trimmed.isEmpty
+                || record.fileName.localizedCaseInsensitiveContains(trimmed)
+                || record.originalVideoFileName.localizedCaseInsensitiveContains(trimmed)
+            return matchesPreset && matchesQuery
+        }
+    }
+}
+
 struct HistoryListView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \HistoryRecord.createdAt, order: .reverse) private var records: [HistoryRecord]
@@ -12,14 +27,7 @@ struct HistoryListView: View {
 
     /// Records after applying the search query and the preset filter.
     private var filteredRecords: [HistoryRecord] {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        return records.filter { record in
-            let matchesPreset = presetFilter == nil || record.qualityPreset == presetFilter?.rawValue
-            let matchesQuery = query.isEmpty
-                || record.fileName.localizedCaseInsensitiveContains(query)
-                || record.originalVideoFileName.localizedCaseInsensitiveContains(query)
-            return matchesPreset && matchesQuery
-        }
+        HistoryFilter.apply(to: records, query: searchText, preset: presetFilter)
     }
 
     var body: some View {
